@@ -1,0 +1,16 @@
+node_modules/
+dist/
+*.log
+.vite.pid
+
+# Secrets & local env — never commit these
+.env
+.env.local
+.env.*.local
+
+# Vercel
+.vercel
+
+# Local tooling and visual QA artifacts
+.claude/
+*-check.png

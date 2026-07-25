@@ -1,0 +1,299 @@
+{
+  "info": {
+    "title": "",
+    "id": "",
+    "version": "1.0",
+    "analyst": "Arthor ChM. Ts. Hadi Fauzi.",
+    "reviewer": "",
+    "date": "2026-07-22",
+    "lab": "",
+    "type": "validation",
+    "status": "Draft",
+    "standard": "",
+    "analyte": "",
+    "matrix": "",
+    "technique": "",
+    "unit": "mg/kg",
+    "range": "",
+    "requirement": "",
+    "intendedUse": ""
+  },
+  "criteria": {
+    "r2Min": 0.995,
+    "residPctMax": 5,
+    "rsdRMax": 5,
+    "rsdIMax": 8,
+    "recMin": 80,
+    "recMax": 120,
+    "robustPctMax": 2,
+    "kQ": 10
+  },
+  "selectivity": {
+    "notes": "",
+    "interferents": [
+      {
+        "name": "",
+        "level": "",
+        "effectPct": "",
+        "acceptable": true
+      }
+    ]
+  },
+  "linearity": {
+    "points": [
+      {
+        "conc": 0.005,
+        "reps": [
+          0.0102,
+          0.01,
+          0.0101
+        ]
+      },
+      {
+        "conc": 0.01,
+        "reps": [
+          0.0201,
+          0.0199,
+          0.02
+        ]
+      },
+      {
+        "conc": 0.025,
+        "reps": [
+          0.05,
+          0.0503,
+          0.0498
+        ]
+      },
+      {
+        "conc": 0.05,
+        "reps": [
+          0.1001,
+          0.0998,
+          0.1003
+        ]
+      },
+      {
+        "conc": 0.075,
+        "reps": [
+          0.1506,
+          0.1494,
+          0.15
+        ]
+      },
+      {
+        "conc": 0.1,
+        "reps": [
+          0.2008,
+          0.1996,
+          0.2004
+        ]
+      }
+    ]
+  },
+  "lodloq": {
+    "approach": "usepa",
+    "blankType": "reagent",
+    "blankCorrected": true,
+    "n": 1,
+    "nb": 10,
+    "reps": [
+      0.0007,
+      0.0008,
+      0.0006,
+      0.0007,
+      0.0006,
+      0.0009,
+      0.0007,
+      0.0006,
+      0.0008,
+      0.0007
+    ],
+    "slopeFromCal": true,
+    "manualSlope": "",
+    "idlK": 3,
+    "spikeLevel": 0.005,
+    "idlReps": [
+      0.0018,
+      0.0022,
+      0.0015,
+      0.002,
+      0.0019,
+      0.0024,
+      0.0017
+    ],
+    "mdlSpiked": [
+      0.0048,
+      0.0052,
+      0.0046,
+      0.0051,
+      0.0049,
+      0.0053,
+      0.0047
+    ],
+    "mdlBlank": []
+  },
+  "precision": {
+    "label": "Analyst",
+    "groups": [
+      [
+        0.0502,
+        0.0498,
+        0.0504
+      ],
+      [
+        0.0497,
+        0.0501,
+        0.0499
+      ],
+      [
+        0.0503,
+        0.0499,
+        0.0501
+      ],
+      [
+        0.0498,
+        0.0496,
+        0.0502
+      ],
+      [
+        0.0501,
+        0.0504,
+        0.0499
+      ],
+      [
+        0.0497,
+        0.0502,
+        0.05
+      ],
+      [
+        0.0499,
+        0.0501,
+        0.0503
+      ],
+      [
+        0.0504,
+        0.05,
+        0.0498
+      ]
+    ],
+    "massFraction": 5e-8,
+    "sRMeasured": ""
+  },
+  "trueness": {
+    "mode": "spike",
+    "crmRef": 0.05,
+    "crmU": 0.001,
+    "crmReps": [
+      0.0498,
+      0.0501,
+      0.0504,
+      0.0499,
+      0.0502,
+      0.0496,
+      0.05,
+      0.0498,
+      0.0502,
+      0.05
+    ],
+    "spikeMethod": "volume",
+    "spikeAmount": 0.04,
+    "unspiked": [
+      0.01,
+      0.0102,
+      0.0098,
+      0.0101,
+      0.0099
+    ],
+    "spiked": [
+      0.0502,
+      0.0498,
+      0.05,
+      0.0504,
+      0.0497
+    ],
+    "vSpl": 100,
+    "vSpk": 1,
+    "cSpk": 4.04
+  },
+  "recovery": {
+    "levels": [
+      {
+        "conc": 5,
+        "reps": [
+          4.8,
+          4.9,
+          5,
+          4.7,
+          5.1
+        ]
+      },
+      {
+        "conc": 50,
+        "reps": [
+          49.2,
+          50.1,
+          49.8,
+          50.3,
+          49.5
+        ]
+      },
+      {
+        "conc": 90,
+        "reps": [
+          88.5,
+          89.2,
+          90.1,
+          89.8,
+          89.8
+        ]
+      }
+    ]
+  },
+  "robustness": {
+    "factors": [
+      {
+        "name": "Pyrolysis temperature (°C)",
+        "nominal": "800",
+        "low": "750",
+        "high": "850",
+        "resLow": 0.0496,
+        "resHigh": 0.0502
+      },
+      {
+        "name": "Atomization temperature (°C)",
+        "nominal": "2300",
+        "low": "2200",
+        "high": "2400",
+        "resLow": 0.0498,
+        "resHigh": 0.0503
+      },
+      {
+        "name": "Injection volume (µL)",
+        "nominal": "20",
+        "low": "18",
+        "high": "22",
+        "resLow": 0.0497,
+        "resHigh": 0.0501
+      }
+    ]
+  },
+  "comparison": {
+    "mode": "twoSample",
+    "labelA": "Analyst 1",
+    "labelB": "Analyst 2",
+    "dataA": [
+      0.0502,
+      0.0498,
+      0.0504
+    ],
+    "dataB": [
+      0.0497,
+      0.0501,
+      0.0499
+    ],
+    "refValue": 0.05,
+    "srcA": "0",
+    "srcB": "1"
+  }
+}
