@@ -1,6 +1,6 @@
-import { useState, useMemo, useRef, useEffect, lazy, Suspense } from "react";
+import { useState, useMemo, useRef, useEffect, lazy, Suspense, createContext, useContext } from "react";
 import {
-  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip,
+  LineChart, Line, Area, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip,
   ResponsiveContainer, ScatterChart, Scatter, BarChart, Bar, ComposedChart,
   ReferenceLine, ReferenceArea, ErrorBar, Cell,
 } from "recharts";
@@ -320,6 +320,10 @@ const chartTheme = (dark) => ({
     borderRadius: 8, fontSize: 12, fontFamily: "'IBM Plex Mono', monospace",
     color: dark ? "hsl(180 12% 90%)" : "hsl(200 15% 12%)",
   },
+  // Recharts colours each tooltip row from the series colour by default, which
+  // is unreadable on the dark card — force high-contrast text explicitly.
+  tooltipItem: { color: dark ? "hsl(180 12% 90%)" : "hsl(200 15% 12%)" },
+  tooltipLabel: { color: dark ? "hsl(185 10% 70%)" : "hsl(200 12% 35%)", fontWeight: 600, marginBottom: 2 },
 });
 
 /* ════════════════════════════════════════════════════════════════
@@ -429,8 +433,14 @@ const Field = ({ label, className = "", type, ...props }) => (
   </div>
 );
 
+/* Confirmation helper, supplied by the App. Default just runs the action (no
+   provider = no confirm), so RepGrid keeps working in isolation / tests. */
+const ConfirmContext = createContext((_message, onConfirm) => onConfirm?.());
+
 /** Chip-style editable numeric replicate list */
-const RepGrid = ({ values, onChange, label, outlierIdx = -1 }) => (
+const RepGrid = ({ values, onChange, label, outlierIdx = -1 }) => {
+  const askDelete = useContext(ConfirmContext);
+  return (
   <div>
     {label && <div className="text-[11px] uppercase tracking-wider text-muted-foreground font-medium mb-1.5">{label}</div>}
     <div className="flex flex-wrap gap-1.5 items-center">
@@ -440,7 +450,12 @@ const RepGrid = ({ values, onChange, label, outlierIdx = -1 }) => (
             onChange={(e) => { const nv = [...values]; nv[i] = e.target.value === "" ? "" : +e.target.value; onChange(nv); }}
             className={`w-[84px] h-8 rounded-md border bg-card px-2 text-[13px] font-data text-foreground focus:outline-none focus:ring-2 focus:ring-ring ${
               i === outlierIdx ? "border-red-500 text-red-500" : "border-input"}`} />
-          <button onClick={() => onChange(values.filter((_, k) => k !== i))}
+          <button onClick={() => {
+              const del = () => onChange(values.filter((_, k) => k !== i));
+              // An empty cell holds no data — remove it straight away; only confirm when a value would be lost.
+              if (v === "" || v === null || v === undefined) { del(); return; }
+              askDelete(`The replicate value ${v} will be removed.`, del, "Delete this value?");
+            }}
             className="absolute -top-1.5 -right-1.5 hidden group-hover:flex h-4 w-4 items-center justify-center rounded-full bg-destructive text-destructive-foreground text-[9px]">×</button>
         </div>
       ))}
@@ -449,7 +464,8 @@ const RepGrid = ({ values, onChange, label, outlierIdx = -1 }) => (
       </Button>
     </div>
   </div>
-);
+  );
+};
 
 const DataTable = ({ headers, rows }) => (
   <div className="overflow-x-auto rounded-lg border border-border">
@@ -508,6 +524,443 @@ const WorkSteps = ({ steps, title = "Show calculation steps" }) => {
         </ol>
       )}
     </div>
+  );
+};
+
+/* Standard-normal CDF (Abramowitz & Stegun 7.1.26) — used to label the α/β
+   error probabilities on the LOD/LOQ distribution chart. */
+const normCdf = (z) => {
+  const t = 1 / (1 + 0.2316419 * Math.abs(z));
+  const d = 0.3989422804014327 * Math.exp((-z * z) / 2);
+  const p = d * t * (0.319381530 + t * (-0.356563782 + t * (1.781477937 + t * (-1.821255978 + t * 1.330274429))));
+  return z > 0 ? 1 - p : p;
+};
+
+/* Log-gamma (Lanczos, g = 7) — needed for the Beta normaliser of the F density. */
+const lgamma = (z) => {
+  const c = [0.99999999999980993, 676.5203681218851, -1259.1392167224028,
+    771.32342877765313, -176.61502916214059, 12.507343278686905,
+    -0.13857109526572012, 9.9843695780195716e-6, 1.5056327351493116e-7];
+  if (z < 0.5) return Math.log(Math.PI / Math.sin(Math.PI * z)) - lgamma(1 - z);
+  z -= 1;
+  let x = c[0];
+  for (let i = 1; i < 9; i++) x += c[i] / (z + i);
+  const t = z + 7.5;
+  return 0.5 * Math.log(2 * Math.PI) + (z + 0.5) * Math.log(t) - t + Math.log(x);
+};
+
+/* F-distribution probability density at x for (d1, d2) degrees of freedom.
+   Drawn as the reference curve behind the F-test statistic. */
+const fPdf = (x, d1, d2) => {
+  if (x <= 0) return 0;
+  const lnB = lgamma(d1 / 2) + lgamma(d2 / 2) - lgamma((d1 + d2) / 2);
+  const lnNum = (d1 / 2) * Math.log(d1 / d2) + (d1 / 2 - 1) * Math.log(x)
+    - ((d1 + d2) / 2) * Math.log(1 + (d1 / d2) * x);
+  return Math.exp(lnNum - lnB);
+};
+
+/* Two-line marker for the LOD/LOQ distribution chart: the name (LOD, LOQ …)
+   over its concentration value, drawn just above the plotting area. */
+const CurveMarkerLabel = ({ viewBox, name, value, color }) => {
+  if (!viewBox) return null;
+  const { x, y } = viewBox;
+  return (
+    <g pointerEvents="none">
+      <text x={x} y={y - 13} textAnchor="middle" fill={color} fontSize={10} fontWeight={600}>{name}</text>
+      <text x={x} y={y - 2} textAnchor="middle" fill={color} fillOpacity={0.8} fontSize={9}
+        fontFamily="'IBM Plex Mono', monospace">{value}</text>
+    </g>
+  );
+};
+
+/* Hover tooltip: the measured value plus each distribution's relative height
+   (as a % of its own peak) at that point — so the crossover at LC is visible. */
+const DistTooltip = ({ active, payload, label, C, unit }) => {
+  if (!active || !payload || !payload.length) return null;
+  const rows = [
+    { key: "blank", name: "Blank", color: C.axis },
+    { key: "atLod", name: "At LOD", color: C.bad },
+    { key: "atLoq", name: "At LOQ", color: C.primary },
+  ];
+  const valOf = (k) => { const p = payload.find((r) => r.dataKey === k); return p ? p.value : null; };
+  return (
+    <div style={{ ...C.tooltip, padding: "6px 9px", minWidth: 128 }}>
+      <div style={{ ...C.tooltipLabel }}>{fmtSig(label, 4)} {unit}</div>
+      {rows.map((r) => {
+        const v = valOf(r.key);
+        return (
+          <div key={r.key} style={{ display: "flex", alignItems: "center", gap: 6, ...C.tooltipItem }}>
+            <span style={{ width: 8, height: 8, borderRadius: 2, background: r.color, display: "inline-block", flexShrink: 0 }} />
+            <span style={{ flex: 1 }}>{r.name}</span>
+            <span style={{ fontVariantNumeric: "tabular-nums" }}>{v == null ? "—" : (v * 100).toFixed(0) + " %"}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+};
+
+/* Conceptual normal-distribution view of LOD/LOQ, mirroring the classic
+   Eurachem/IUPAC detection-limit figure: the blank's noise, a sample at the
+   LOD and a sample at the LOQ are drawn as bell curves of equal width (s′₀).
+   The decision limit LC sits midway between the blank and the LOD, so the
+   false-positive (α) and false-negative (β) tails are equal. Works for every
+   non-USEPA approach — s′₀ is taken directly when available, otherwise it is
+   recovered from LOD/3 (the calibration route). */
+const LodDistributionChart = ({ lod, kQ, unit, C }) => {
+  if (!lod || lod.lod == null || lod.loq == null) return null;
+  const sigma = lod.s0p && lod.s0p > 0 ? lod.s0p : lod.lod > 0 ? lod.lod / 3 : 0;
+  if (!(sigma > 0) || !isFinite(lod.loq)) return null;
+  const mu = Number.isFinite(lod.mean) ? lod.mean : 0;      // blank centre
+  const lodC = mu + lod.lod;                                // LOD curve centre = μ + 3·s′₀
+  const loqC = mu + lod.loq;                                // LOQ curve centre = μ + k_Q·s′₀
+  const lc = mu + lod.lod / 2;                              // decision limit (α = β)
+  const alpha = 1 - normCdf((lc - mu) / sigma);             // ≈ 6.7 % for the 3s rule
+
+  const xMin = mu - 4 * sigma;
+  const xMax = loqC + 4 * sigma;
+  const N = 260;
+  const g = (x, c) => Math.exp(-0.5 * ((x - c) / sigma) ** 2); // peak-normalised bell
+  const data = [];
+  for (let i = 0; i <= N; i++) {
+    const x = xMin + ((xMax - xMin) * i) / N;
+    const blank = g(x, mu);
+    data.push({
+      x,
+      blank,
+      atLod: g(x, lodC),
+      atLoq: g(x, loqC),
+      alpha: x >= lc ? blank : null,          // blank tail beyond LC → false positive
+      beta: x <= lc ? g(x, lodC) : null,      // LOD tail below LC → false negative
+    });
+  }
+  const tickF = (v) => fmtSig(v, 2);
+  const pct = (p) => (p * 100 >= 1 ? (p * 100).toFixed(1) : (p * 100).toPrecision(2)) + " %";
+  const Dot = ({ color, filled = false, label }) => (
+    <span className="inline-flex items-center gap-1.5">
+      <span className="inline-block h-2.5 w-2.5 rounded-sm" style={filled ? { background: color, opacity: 0.55 } : { border: `2px solid ${color}` }} />
+      {label}
+    </span>
+  );
+  return (
+    <Card>
+      <CardHeader className="pb-1">
+        <CardTitle className="text-xs text-muted-foreground uppercase tracking-wider">
+          Distribution view — how LOD &amp; LOQ sit above the blank noise
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="h-[300px]">
+          <ResponsiveContainer width="100%" height="100%">
+            <ComposedChart data={data} margin={{ top: 34, right: 18, bottom: 18, left: 4 }}>
+              <CartesianGrid stroke={C.grid} strokeDasharray="3 3" vertical={false} />
+              <XAxis dataKey="x" type="number" domain={[xMin, xMax]} tickFormatter={tickF}
+                tick={{ fontSize: 10, fill: C.axis }} stroke={C.grid} allowDecimals
+                label={{ value: `Measured value (${unit})`, position: "insideBottom", offset: -8, fontSize: 10, fill: C.axis }} />
+              <YAxis hide domain={[0, 1.18]} />
+              <RTooltip content={<DistTooltip C={C} unit={unit} />}
+                cursor={{ stroke: C.axis, strokeDasharray: "3 3" }} isAnimationActive={false} />
+              {/* shaded decision tails */}
+              <Area dataKey="alpha" stroke="none" fill={C.bad} fillOpacity={0.5} connectNulls={false} isAnimationActive={false} />
+              <Area dataKey="beta" stroke="none" fill={C.warn} fillOpacity={0.45} connectNulls={false} isAnimationActive={false} />
+              {/* three distributions */}
+              <Area dataKey="blank" stroke={C.axis} strokeWidth={2} fill={C.axis} fillOpacity={0.06} isAnimationActive={false} />
+              <Area dataKey="atLod" stroke={C.bad} strokeWidth={2} fill="none" isAnimationActive={false} />
+              <Area dataKey="atLoq" stroke={C.primary} strokeWidth={2.2} fill="none" isAnimationActive={false} />
+              {/* markers — name over concentration value */}
+              <ReferenceLine x={mu} stroke={C.axis} strokeDasharray="2 2"
+                label={<CurveMarkerLabel name="Blank" value={fmtSig(mu, 3)} color={C.axis} />} />
+              <ReferenceLine x={lc} stroke={C.warn} strokeDasharray="4 3"
+                label={<CurveMarkerLabel name="LC" value={fmtSig(lc, 3)} color={C.warn} />} />
+              <ReferenceLine x={lodC} stroke={C.bad} strokeWidth={1.5}
+                label={<CurveMarkerLabel name="LOD" value={fmtSig(lodC, 3)} color={C.bad} />} />
+              <ReferenceLine x={loqC} stroke={C.primary} strokeWidth={1.5}
+                label={<CurveMarkerLabel name="LOQ" value={fmtSig(loqC, 3)} color={C.primary} />} />
+            </ComposedChart>
+          </ResponsiveContainer>
+        </div>
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-[11px] text-muted-foreground">
+          <Dot color={C.axis} label="Blank (noise), width s′₀" />
+          <Dot color={C.bad} label="Sample at LOD = μ + 3·s′₀" />
+          <Dot color={C.primary} label={`Sample at LOQ = μ + ${fmtSig(kQ, 2)}·s′₀`} />
+          <Dot color={C.bad} filled label={<>α (false positive) ≈ {pct(alpha)}</>} />
+          <Dot color={C.warn} filled label={<>β (false negative) ≈ {pct(alpha)}</>} />
+        </div>
+        <p className="text-[11px] leading-relaxed text-muted-foreground">
+          Each curve is the spread of repeat measurements. The decision limit <b>LC</b> sits midway, so a blank rarely reads
+          above it (<b>α</b>) and a true sample at the <b>LOD</b> rarely reads below it (<b>β</b>) — that is what &ldquo;3·s′₀&rdquo;
+          buys you. At the <b>LOQ</b> the curve has pulled clear of the noise: the relative scatter falls to ≈ {pct(1 / (Number(kQ) || 10))}
+          {" "}(s′₀ ÷ LOQ = 1 ÷ {fmtSig(kQ, 2)}), low enough to report a number rather than just &ldquo;detected&rdquo;.
+        </p>
+      </CardContent>
+    </Card>
+  );
+};
+
+/* Hover tooltip for the trueness / recovery charts: measured value, relative
+   frequency and the signed deviation from the reference (true value or 100 %). */
+const TruenessTooltip = ({ active, payload, label, C, unit, refVal, refName = "vs true" }) => {
+  if (!active || !payload || !payload.length) return null;
+  const yp = payload.find((p) => p.dataKey === "y");
+  const y = yp ? yp.value : null;
+  const dev = Number.isFinite(refVal) ? label - refVal : null;
+  return (
+    <div style={{ ...C.tooltip, padding: "6px 9px", minWidth: 140 }}>
+      <div style={{ ...C.tooltipLabel }}>{fmtSig(label, 4)} {unit}</div>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, ...C.tooltipItem }}>
+        <span>Frequency</span>
+        <span style={{ fontVariantNumeric: "tabular-nums" }}>{y == null ? "—" : (y * 100).toFixed(0) + " %"}</span>
+      </div>
+      {dev != null && (
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, ...C.tooltipItem }}>
+          <span>{refName}</span>
+          <span style={{ fontVariantNumeric: "tabular-nums" }}>{(dev >= 0 ? "+" : "") + fmtSig(dev, 3)} {unit}</span>
+        </div>
+      )}
+    </div>
+  );
+};
+
+/* Trueness/bias distribution — mirrors the classic accuracy figure: the blue
+   curve is the spread of repeat measurements (random error → precision, ±2σ);
+   the gap between its centre μ and the red true/reference value is the bias
+   (systematic error → trueness). Accuracy is the two combined. A faint red
+   band marks the CRM's own expanded uncertainty around the reference. */
+const TruenessDistributionChart = ({ mean, sd, refVal, refU, bias, unit, C }) => {
+  if (![mean, sd, refVal].every(Number.isFinite) || !(sd > 0)) return null;
+  const mu = mean, sigma = sd;
+  const xMin = Math.min(refVal, mu - 3.6 * sigma) - 0.5 * sigma;
+  const xMax = Math.max(refVal, mu + 3.6 * sigma) + 0.5 * sigma;
+  const span = xMax - xMin;
+  const N = 280;
+  const g = (x) => Math.exp(-0.5 * ((x - mu) / sigma) ** 2);
+  const data = [];
+  for (let i = 0; i <= N; i++) {
+    const x = xMin + (span * i) / N;
+    const y = g(x);
+    data.push({ x, y, band: x >= mu - 2 * sigma && x <= mu + 2 * sigma ? y : null });
+  }
+  const showBias = Math.abs(mu - refVal) > span * 0.012;
+  const coincide = Math.abs(mu - refVal) < span * 0.045;
+  const withinU = Number.isFinite(refU) && refU > 0 ? Math.abs(bias) <= refU : null;
+  const biasPct = refVal !== 0 ? (bias / refVal) * 100 : null;
+  const sigLines = [mu - 2 * sigma, mu - sigma, mu + sigma, mu + 2 * sigma];
+  const Dot = ({ color, filled, label: lbl }) => (
+    <span className="inline-flex items-center gap-1.5">
+      <span className="inline-block h-2.5 w-2.5 rounded-sm" style={filled ? { background: color, opacity: 0.5 } : { border: `2px solid ${color}` }} />
+      {lbl}
+    </span>
+  );
+  return (
+    <Card>
+      <CardHeader className="pb-1">
+        <CardTitle className="text-xs text-muted-foreground uppercase tracking-wider">
+          Distribution view — measurement spread vs the true value
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="h-[300px]">
+          <ResponsiveContainer width="100%" height="100%">
+            <ComposedChart data={data} margin={{ top: 34, right: 18, bottom: 18, left: 4 }}>
+              <CartesianGrid stroke={C.grid} strokeDasharray="3 3" vertical={false} />
+              <XAxis dataKey="x" type="number" domain={[xMin, xMax]} tickFormatter={(v) => fmtSig(v, 2)}
+                tick={{ fontSize: 10, fill: C.axis }} stroke={C.grid} allowDecimals
+                label={{ value: `Measurement value (${unit})`, position: "insideBottom", offset: -8, fontSize: 10, fill: C.axis }} />
+              <YAxis hide domain={[0, 1.18]} />
+              <RTooltip content={<TruenessTooltip C={C} unit={unit} refVal={refVal} />}
+                cursor={{ stroke: C.axis, strokeDasharray: "3 3" }} isAnimationActive={false} />
+              {/* CRM expanded-uncertainty band around the reference */}
+              {Number.isFinite(refU) && refU > 0 && (
+                <ReferenceArea x1={refVal - refU} x2={refVal + refU} y1={0} y2={1.18} fill={C.bad} fillOpacity={0.07} stroke="none" />
+              )}
+              {/* bias gap (systematic error) */}
+              {showBias && (
+                <ReferenceArea x1={Math.min(refVal, mu)} x2={Math.max(refVal, mu)} y1={0} y2={1.18}
+                  fill={C.ok} fillOpacity={0.1} stroke="none"
+                  label={{ value: "Bias", position: "top", fill: C.ok, fontSize: 10, fontWeight: 600 }} />
+              )}
+              {/* ±2σ precision band + measurement curve */}
+              <Area dataKey="band" stroke="none" fill={C.primary} fillOpacity={0.14} connectNulls={false} isAnimationActive={false} />
+              <Area dataKey="y" stroke={C.primary} strokeWidth={2.2} fill="none" isAnimationActive={false} />
+              {/* ±σ / ±2σ grid */}
+              {sigLines.map((sx, i) => <ReferenceLine key={i} x={sx} stroke={C.grid} strokeDasharray="2 3" />)}
+              {/* markers */}
+              <ReferenceLine x={refVal} stroke={C.bad} strokeDasharray="5 3" strokeWidth={1.5}
+                label={coincide ? undefined : <CurveMarkerLabel name="True value" value={fmtSig(refVal, 3)} color={C.bad} />} />
+              <ReferenceLine x={mu} stroke={C.ok} strokeDasharray="5 3" strokeWidth={1.5}
+                label={<CurveMarkerLabel name={coincide ? "μ ≈ true" : "μ (mean)"} value={fmtSig(mu, 3)} color={C.ok} />} />
+            </ComposedChart>
+          </ResponsiveContainer>
+        </div>
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-[11px] text-muted-foreground">
+          <Dot color={C.primary} label="Measurements (spread = ±2σ)" />
+          <Dot color={C.bad} label="True / reference value" />
+          <Dot color={C.ok} filled label="Bias (systematic error)" />
+        </div>
+        <p className="text-[11px] leading-relaxed text-muted-foreground">
+          The blue curve is the spread of repeat measurements — its width (<b>±2σ</b>) is the <b>random error</b>, i.e. <b>precision</b>.
+          The gap between its centre <b>μ</b> and the <b>true value</b> is the <b>bias</b> (systematic error) → <b>trueness</b>;
+          the two together make up <b>accuracy</b>. Here bias = {fmtSig(bias, 3)} {unit}
+          {biasPct != null && <> ({fmt(biasPct, 2)} %)</>}
+          {withinU != null && <>, {withinU ? "within" : "outside"} the CRM&rsquo;s expanded uncertainty (±{fmtSig(refU, 3)} {unit})</>}.
+        </p>
+      </CardContent>
+    </Card>
+  );
+};
+
+/* Spike-recovery distribution — the recovery estimate as a bell curve around
+   the measured %, its confidence interval (± t·u) shaded, the 100 % target and
+   the method acceptance window. If the target 100 % falls inside the CI the
+   recovery is not significantly different from 100 %; if it falls inside the
+   acceptance window the method passes. */
+const RecoveryDistributionChart = ({ recovery, sdRec, tCrit, significant, recMin, recMax, C }) => {
+  if (!Number.isFinite(recovery) || !Number.isFinite(sdRec) || !(sdRec > 0)) return null;
+  const R = recovery, sigma = sdRec, target = 100;
+  const ci = Number.isFinite(tCrit) && tCrit > 0 ? tCrit * sigma : 2 * sigma;
+  const hasWin = Number.isFinite(recMin) && Number.isFinite(recMax) && recMax > recMin;
+  const lo = Math.min(R - 3.6 * sigma, target, hasWin ? recMin : Infinity);
+  const hi = Math.max(R + 3.6 * sigma, target, hasWin ? recMax : -Infinity);
+  const span = hi - lo || 1;
+  const xMin = lo - span * 0.05;
+  const xMax = hi + span * 0.05;
+  const N = 280;
+  const g = (x) => Math.exp(-0.5 * ((x - R) / sigma) ** 2);
+  const data = [];
+  for (let i = 0; i <= N; i++) {
+    const x = xMin + ((xMax - xMin) * i) / N;
+    const y = g(x);
+    data.push({ x, y, ci: x >= R - ci && x <= R + ci ? y : null });
+  }
+  const coincide = Math.abs(R - target) < (xMax - xMin) * 0.045;
+  const inWindow = hasWin ? R >= recMin && R <= recMax : null;
+  const Dot = ({ color, filled, label: lbl }) => (
+    <span className="inline-flex items-center gap-1.5">
+      <span className="inline-block h-2.5 w-2.5 rounded-sm" style={filled ? { background: color, opacity: 0.5 } : { border: `2px solid ${color}` }} />
+      {lbl}
+    </span>
+  );
+  return (
+    <Card>
+      <CardHeader className="pb-1">
+        <CardTitle className="text-xs text-muted-foreground uppercase tracking-wider">
+          Distribution view — recovery vs the 100 % target
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="h-[300px]">
+          <ResponsiveContainer width="100%" height="100%">
+            <ComposedChart data={data} margin={{ top: 34, right: 18, bottom: 18, left: 4 }}>
+              <CartesianGrid stroke={C.grid} strokeDasharray="3 3" vertical={false} />
+              <XAxis dataKey="x" type="number" domain={[xMin, xMax]} tickFormatter={(v) => fmt(v, 0)}
+                tick={{ fontSize: 10, fill: C.axis }} stroke={C.grid} allowDecimals
+                label={{ value: "Recovery (%)", position: "insideBottom", offset: -8, fontSize: 10, fill: C.axis }} />
+              <YAxis hide domain={[0, 1.18]} />
+              <RTooltip content={<TruenessTooltip C={C} unit="%" refVal={target} refName="vs 100 %" />}
+                cursor={{ stroke: C.axis, strokeDasharray: "3 3" }} isAnimationActive={false} />
+              {/* method acceptance window */}
+              {hasWin && (
+                <ReferenceArea x1={recMin} x2={recMax} y1={0} y2={1.18} fill={C.ok} fillOpacity={0.06} stroke="none" />
+              )}
+              {/* confidence interval (± t·u) + recovery curve */}
+              <Area dataKey="ci" stroke="none" fill={C.primary} fillOpacity={0.14} connectNulls={false} isAnimationActive={false} />
+              <Area dataKey="y" stroke={C.primary} strokeWidth={2.2} fill="none" isAnimationActive={false} />
+              {/* acceptance limits */}
+              {hasWin && <>
+                <ReferenceLine x={recMin} stroke={C.warn} strokeDasharray="4 3"
+                  label={<CurveMarkerLabel name="Lower" value={`${fmt(recMin, 0)} %`} color={C.warn} />} />
+                <ReferenceLine x={recMax} stroke={C.warn} strokeDasharray="4 3"
+                  label={<CurveMarkerLabel name="Upper" value={`${fmt(recMax, 0)} %`} color={C.warn} />} />
+              </>}
+              {/* 100 % target + measured recovery */}
+              <ReferenceLine x={target} stroke={C.ok} strokeDasharray="5 3" strokeWidth={1.5}
+                label={coincide ? undefined : <CurveMarkerLabel name="Target" value="100 %" color={C.ok} />} />
+              <ReferenceLine x={R} stroke={C.violet} strokeDasharray="5 3" strokeWidth={1.5}
+                label={<CurveMarkerLabel name={coincide ? "R ≈ 100 %" : "Recovery"} value={`${fmt(R, 1)} %`} color={C.violet} />} />
+            </ComposedChart>
+          </ResponsiveContainer>
+        </div>
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-[11px] text-muted-foreground">
+          <Dot color={C.primary} label="Recovery estimate (± t·u shaded)" />
+          <Dot color={C.violet} label={`Measured recovery ${fmt(R, 1)} %`} />
+          <Dot color={C.ok} label="100 % target" />
+          {hasWin && <Dot color={C.ok} filled label={`Acceptance window ${fmt(recMin, 0)}–${fmt(recMax, 0)} %`} />}
+        </div>
+        <p className="text-[11px] leading-relaxed text-muted-foreground">
+          The blue curve is how well the recovery is known; the shaded band is its <b>{Number.isFinite(tCrit) ? "95 % confidence interval" : "spread"}</b> (± t·u).
+          The <b>100 % target</b> falls <b>{significant ? "outside" : "inside"}</b> that band, so the recovery is <b>{significant ? "significantly different from" : "not significantly different from"}</b> 100 %.
+          {inWindow != null && <> The measured {fmt(R, 1)} % also sits <b>{inWindow ? "inside" : "outside"}</b> the {fmt(recMin, 0)}–{fmt(recMax, 0)} % acceptance window.</>}
+        </p>
+      </CardContent>
+    </Card>
+  );
+};
+
+/* F-distribution reference curve for the variance F-test: the density for
+   (df1, df2), the upper-tail rejection region beyond F crit, and where the
+   observed F statistic falls. F inside the shaded tail → variances differ. */
+const FDistributionChart = ({ df1, df2, F, fCrit, significant, C }) => {
+  if (![df1, df2, fCrit].every(Number.isFinite) || !(fCrit > 0)) return null;
+  const capped = !Number.isFinite(F) || F > fCrit * 3;      // keep the axis readable if F is huge
+  const Fx = capped ? fCrit * 3 : F;
+  const xMax = Math.max(Fx, fCrit, 3) * 1.4;
+  const Npt = 240;
+  const x0 = xMax / Npt;                                     // skip the x = 0 singularity
+  const raw = [];
+  for (let i = 0; i <= Npt; i++) {
+    const x = x0 + ((xMax - x0) * i) / Npt;
+    raw.push({ x, y: fPdf(x, df1, df2) });
+  }
+  const norm = Math.max(...raw.map((r) => r.y).filter(Number.isFinite)) || 1;
+  const data = raw.map((r) => {
+    const y = Math.min(r.y / norm, 1.12);
+    return { x: r.x, y, reject: r.x >= fCrit ? y : null };
+  });
+  const Dot = ({ color, filled, label: lbl }) => (
+    <span className="inline-flex items-center gap-1.5">
+      <span className="inline-block h-2.5 w-2.5 rounded-sm" style={filled ? { background: color, opacity: 0.5 } : { border: `2px solid ${color}` }} />
+      {lbl}
+    </span>
+  );
+  return (
+    <Card>
+      <CardHeader className="pb-1">
+        <CardTitle className="text-xs text-muted-foreground uppercase tracking-wider">F-test — variance distribution (df {df1}, {df2})</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="h-[260px]">
+          <ResponsiveContainer width="100%" height="100%">
+            <ComposedChart data={data} margin={{ top: 30, right: 18, bottom: 18, left: 4 }}>
+              <CartesianGrid stroke={C.grid} strokeDasharray="3 3" vertical={false} />
+              <XAxis dataKey="x" type="number" domain={[0, xMax]} tickFormatter={(v) => fmt(v, 1)}
+                tick={{ fontSize: 10, fill: C.axis }} stroke={C.grid} allowDecimals
+                label={{ value: "F value", position: "insideBottom", offset: -8, fontSize: 10, fill: C.axis }} />
+              <YAxis hide domain={[0, 1.18]} />
+              <RTooltip contentStyle={C.tooltip} itemStyle={C.tooltipItem} labelStyle={C.tooltipLabel}
+                formatter={(v, n) => [fmt(v, 3), n === "reject" ? "rejection tail" : "density"]}
+                labelFormatter={(l) => `F = ${fmt(l, 2)}`} isAnimationActive={false} />
+              <Area dataKey="reject" stroke="none" fill={C.bad} fillOpacity={0.35} connectNulls={false} isAnimationActive={false} />
+              <Area dataKey="y" stroke={C.primary} strokeWidth={2.2} fill="none" isAnimationActive={false} />
+              <ReferenceLine x={fCrit} stroke={C.warn} strokeDasharray="5 3" strokeWidth={1.5}
+                label={<CurveMarkerLabel name="F crit" value={fmt(fCrit, 2)} color={C.warn} />} />
+              <ReferenceLine x={Fx} stroke={significant ? C.bad : C.ok} strokeDasharray="5 3" strokeWidth={1.5}
+                label={<CurveMarkerLabel name={capped ? "F (≫)" : "F"} value={fmt(F, 2)} color={significant ? C.bad : C.ok} />} />
+            </ComposedChart>
+          </ResponsiveContainer>
+        </div>
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-[11px] text-muted-foreground">
+          <Dot color={C.primary} label={`F density (df ${df1}, ${df2})`} />
+          <Dot color={C.bad} filled label="Rejection tail (α = 0.025)" />
+          <Dot color={C.warn} label={`F crit = ${fmt(fCrit, 2)}`} />
+        </div>
+        <p className="text-[11px] leading-relaxed text-muted-foreground">
+          The curve is the expected spread of the variance ratio when the two variances are truly equal. The red tail beyond
+          {" "}<b>F crit = {fmt(fCrit, 2)}</b> is the 2.5 % upper rejection region (two-tailed 95 %). The observed
+          {" "}<b>F = {fmt(F, 2)}</b> falls <b>{significant ? "inside" : "outside"}</b> it → the variances
+          {" "}<b>{significant ? "differ significantly" : "are comparable"}</b>, which selects the {significant ? "Welch" : "pooled"} t-test.
+        </p>
+      </CardContent>
+    </Card>
   );
 };
 
@@ -1058,6 +1511,9 @@ export default function LabValidatePro() {
   const [presetsOpen, setPresetsOpen] = useState(false);
   const [presets, setPresets] = useState([]);
   const [pendingDelete, setPendingDelete] = useState(null); // saved study awaiting delete confirmation
+  const [confirmDel, setConfirmDel] = useState(null);       // generic row-delete confirmation: { title, message, onConfirm }
+  // Open a confirmation modal before running a destructive delete. onConfirm runs only if the user confirms.
+  const askDelete = (message, onConfirm, title = "Delete this item?") => setConfirmDel({ title, message, onConfirm });
   const [presetName, setPresetName] = useState("");
   const [folderName, setFolderName] = useState(null);
   const [newOpen, setNewOpen] = useState(false);
@@ -1676,7 +2132,7 @@ export default function LabValidatePro() {
                 {i === 0 && <FieldLabel>OK?</FieldLabel>}
                 <Switch checked={it.acceptable} onCheckedChange={(v) => { const a = [...study.selectivity.interferents]; a[i] = { ...it, acceptable: v }; up("selectivity", { interferents: a }); }} />
               </div>
-              <Button variant="ghost" size="sm" className="h-9 text-destructive" onClick={() => up("selectivity", { interferents: study.selectivity.interferents.filter((_, k) => k !== i) })}><Trash2 className="h-4 w-4" /></Button>
+              <Button variant="ghost" size="sm" className="h-9 text-destructive" onClick={() => askDelete("This interferent / matrix row and everything entered in it will be removed.", () => up("selectivity", { interferents: study.selectivity.interferents.filter((_, k) => k !== i) }), "Delete this row?")}><Trash2 className="h-4 w-4" /></Button>
             </div>
           ))}
           <Button variant="outline" size="sm" onClick={() => up("selectivity", { interferents: [...study.selectivity.interferents, { name: "", level: "", effectPct: "", acceptable: true }] })}>
@@ -1697,6 +2153,32 @@ export default function LabValidatePro() {
     const pts = study.linearity.points;
     const setPts = (p) => up("linearity", { points: p });
     const chartData = lin ? lin.rows.map((r) => ({ ...r })) : [];
+    // Derived series for the richer chart set (all cheap — recomputed per render).
+    let band = [], rfData = [], accData = [], meanRF = 0, rfTol = 0;
+    if (lin) {
+      const t = S.tCrit95(lin.n - 2);
+      const xs = lin.rows.map((r) => r.conc);
+      const xMin = Math.min(...xs), xMax = Math.max(...xs);
+      const concMean = new Map(lin.rows.map((r) => [r.conc, r.yObs]));
+      const G = 48, grid = [];
+      for (let i = 0; i <= G; i++) grid.push(xMin + ((xMax - xMin) * i) / G);
+      // 95 % confidence band of the fitted line: ŷ ± t·Sy/x·√(1/n + (x−x̄)²/Sxx)
+      band = Array.from(new Set([...grid, ...xs])).sort((a, b) => a - b).map((x) => {
+        const fit = lin.slope * x + lin.intercept;
+        const half = t * lin.syx * Math.sqrt(1 / lin.n + (x - lin.mx) ** 2 / lin.sxx);
+        return { x, fit, band: [fit - half, fit + half], yObs: concMean.has(x) ? concMean.get(x) : null };
+      });
+      // Response factor (signal / concentration) — should stay flat if the method is linear.
+      const rfRows = lin.rows.filter((r) => r.rf !== null);
+      meanRF = rfRows.length ? rfRows.reduce((sm, r) => sm + r.rf, 0) / rfRows.length : 0;
+      rfTol = meanRF * (+cr.residPctMax) / 100;
+      rfData = rfRows.map((r) => ({ conc: r.conc, rf: r.rf, ok: Math.abs(r.rf - meanRF) <= rfTol }));
+      // Back-calculated concentration recovery — the analyst-facing accuracy view.
+      accData = lin.rows.map((r) => {
+        const back = lin.slope !== 0 ? (r.yObs - lin.intercept) / lin.slope : null;
+        return { conc: r.conc, devPct: back !== null && r.conc !== 0 ? ((back - r.conc) / r.conc) * 100 : null };
+      }).filter((r) => r.devPct !== null);
+    }
     return (
       <div className="space-y-4">
         <GuideNote>
@@ -1720,7 +2202,7 @@ export default function LabValidatePro() {
                   <span className="text-[11px] text-muted-foreground">{unit}</span>
                 </div>
                 <div className="flex-1 min-w-[240px]"><RepGrid values={p.reps} onChange={(v) => { const a = [...pts]; a[i] = { ...p, reps: v }; setPts(a); }} /></div>
-                <Button variant="ghost" size="sm" className="text-destructive h-8" onClick={() => setPts(pts.filter((_, k) => k !== i))}><Trash2 className="h-3.5 w-3.5" /></Button>
+                <Button variant="ghost" size="sm" className="text-destructive h-8" onClick={() => askDelete("This calibration level and its replicate readings will be removed.", () => setPts(pts.filter((_, k) => k !== i)), "Delete this level?")}><Trash2 className="h-3.5 w-3.5" /></Button>
               </div>
             ))}
           </CardContent>
@@ -1764,16 +2246,19 @@ export default function LabValidatePro() {
             })()}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
               <Card>
-                <CardHeader className="pb-1"><CardTitle className="text-xs text-muted-foreground uppercase tracking-wider">Calibration curve</CardTitle></CardHeader>
+                <CardHeader className="pb-1"><CardTitle className="text-xs text-muted-foreground uppercase tracking-wider">Calibration curve · 95% confidence band</CardTitle></CardHeader>
                 <CardContent className="h-[260px]">
                   <ResponsiveContainer width="100%" height="100%">
-                    <ComposedChart data={chartData} margin={{ top: 8, right: 12, bottom: 4, left: 0 }}>
+                    <ComposedChart data={band} margin={{ top: 8, right: 12, bottom: 4, left: 0 }}>
                       <CartesianGrid stroke={C.grid} strokeDasharray="3 3" />
-                      <XAxis dataKey="conc" type="number" domain={["auto", "auto"]} tick={{ fontSize: 11, fill: C.axis }} stroke={C.grid} label={{ value: `Conc (${unit})`, position: "insideBottom", offset: -2, fontSize: 10, fill: C.axis }} />
+                      <XAxis dataKey="x" type="number" domain={["auto", "auto"]} tick={{ fontSize: 11, fill: C.axis }} stroke={C.grid} label={{ value: `Conc (${unit})`, position: "insideBottom", offset: -2, fontSize: 10, fill: C.axis }} />
                       <YAxis tick={{ fontSize: 11, fill: C.axis }} stroke={C.grid} />
-                      <RTooltip contentStyle={C.tooltip} formatter={(v) => fmtSig(v)} />
-                      <Line dataKey="yPred" stroke={C.primary} dot={false} strokeWidth={2} name="Fit" isAnimationActive={false} />
-                      <Scatter dataKey="yObs" fill={C.violet} name="Mean response" isAnimationActive={false} />
+                      <RTooltip contentStyle={C.tooltip} itemStyle={C.tooltipItem} labelStyle={C.tooltipLabel}
+                        formatter={(v, n) => (Array.isArray(v) ? [`${fmtSig(v[0])} – ${fmtSig(v[1])}`, "95% CI"] : [fmtSig(v), n === "fit" ? "Fit" : "Mean response"])}
+                        labelFormatter={(l) => `Conc ${fmtSig(l)} ${unit}`} />
+                      <Area dataKey="band" stroke="none" fill={C.primary} fillOpacity={0.14} connectNulls isAnimationActive={false} />
+                      <Line dataKey="fit" stroke={C.primary} dot={false} strokeWidth={2} connectNulls isAnimationActive={false} />
+                      <Scatter dataKey="yObs" fill={C.violet} isAnimationActive={false} />
                     </ComposedChart>
                   </ResponsiveContainer>
                 </CardContent>
@@ -1786,7 +2271,7 @@ export default function LabValidatePro() {
                       <CartesianGrid stroke={C.grid} strokeDasharray="3 3" />
                       <XAxis dataKey="conc" type="number" domain={["auto", "auto"]} tick={{ fontSize: 11, fill: C.axis }} stroke={C.grid} name="Conc" />
                       <YAxis dataKey="residPct" tick={{ fontSize: 11, fill: C.axis }} stroke={C.grid} />
-                      <RTooltip contentStyle={C.tooltip} formatter={(v) => fmt(v, 2) + " %"} />
+                      <RTooltip contentStyle={C.tooltip} itemStyle={C.tooltipItem} labelStyle={C.tooltipLabel} formatter={(v) => fmt(v, 2) + " %"} />
                       <ReferenceLine y={0} stroke={C.axis} />
                       <ReferenceLine y={+cr.residPctMax} stroke={C.warn} strokeDasharray="4 4" />
                       <ReferenceLine y={-cr.residPctMax} stroke={C.warn} strokeDasharray="4 4" />
@@ -1798,6 +2283,52 @@ export default function LabValidatePro() {
                 </CardContent>
               </Card>
             </div>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <Card>
+                <CardHeader className="pb-1"><CardTitle className="text-xs text-muted-foreground uppercase tracking-wider">Response factor (sensitivity)</CardTitle></CardHeader>
+                <CardContent className="h-[240px]">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <ComposedChart data={rfData} margin={{ top: 8, right: 12, bottom: 4, left: 0 }}>
+                      <CartesianGrid stroke={C.grid} strokeDasharray="3 3" />
+                      <XAxis dataKey="conc" type="number" domain={["auto", "auto"]} tick={{ fontSize: 11, fill: C.axis }} stroke={C.grid} label={{ value: `Conc (${unit})`, position: "insideBottom", offset: -2, fontSize: 10, fill: C.axis }} />
+                      <YAxis domain={["auto", "auto"]} tick={{ fontSize: 11, fill: C.axis }} stroke={C.grid} tickFormatter={(v) => fmtSig(v, 3)} />
+                      <RTooltip contentStyle={C.tooltip} itemStyle={C.tooltipItem} labelStyle={C.tooltipLabel} formatter={(v) => fmtSig(v, 4)} labelFormatter={(l) => `Conc ${fmtSig(l)} ${unit}`} />
+                      <ReferenceArea y1={meanRF - rfTol} y2={meanRF + rfTol} fill={C.primary} fillOpacity={0.08} />
+                      <ReferenceLine y={meanRF} stroke={C.ok} strokeDasharray="4 4" />
+                      <Line dataKey="rf" stroke={C.grid} dot={false} strokeWidth={1} connectNulls isAnimationActive={false} />
+                      <Scatter dataKey="rf" isAnimationActive={false}>
+                        {rfData.map((r, i) => <Cell key={i} fill={r.ok ? C.primary : C.warn} />)}
+                      </Scatter>
+                    </ComposedChart>
+                  </ResponsiveContainer>
+                </CardContent>
+              </Card>
+              <Card>
+                <CardHeader className="pb-1"><CardTitle className="text-xs text-muted-foreground uppercase tracking-wider">Back-calculated accuracy (%)</CardTitle></CardHeader>
+                <CardContent className="h-[240px]">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <ScatterChart margin={{ top: 8, right: 12, bottom: 4, left: 0 }}>
+                      <CartesianGrid stroke={C.grid} strokeDasharray="3 3" />
+                      <XAxis dataKey="conc" type="number" domain={["auto", "auto"]} tick={{ fontSize: 11, fill: C.axis }} stroke={C.grid} name="Conc" label={{ value: `Conc (${unit})`, position: "insideBottom", offset: -2, fontSize: 10, fill: C.axis }} />
+                      <YAxis dataKey="devPct" tick={{ fontSize: 11, fill: C.axis }} stroke={C.grid} />
+                      <RTooltip contentStyle={C.tooltip} itemStyle={C.tooltipItem} labelStyle={C.tooltipLabel} formatter={(v) => fmt(v, 2) + " %"} labelFormatter={(l) => `Conc ${fmtSig(l)} ${unit}`} />
+                      <ReferenceArea y1={-(+cr.residPctMax)} y2={+cr.residPctMax} fill={C.ok} fillOpacity={0.07} />
+                      <ReferenceLine y={0} stroke={C.axis} />
+                      <ReferenceLine y={+cr.residPctMax} stroke={C.warn} strokeDasharray="4 4" />
+                      <ReferenceLine y={-(+cr.residPctMax)} stroke={C.warn} strokeDasharray="4 4" />
+                      <Scatter data={accData} isAnimationActive={false}>
+                        {accData.map((r, i) => <Cell key={i} fill={Math.abs(r.devPct) > +cr.residPctMax ? C.bad : C.primary} />)}
+                      </Scatter>
+                    </ScatterChart>
+                  </ResponsiveContainer>
+                </CardContent>
+              </Card>
+            </div>
+            <p className="text-[11px] leading-relaxed text-muted-foreground">
+              The <b>confidence band</b> is the 95 % envelope of the fitted line (ŷ ± t·S<sub>y/x</sub>·√(1/n + (x−x̄)²/S<sub>xx</sub>)) — narrowest at the data centroid, widest at the ends.
+              The <b>response-factor</b> plot should stay flat within the shaded band (constant sensitivity ⇒ linear); a slope or curve there signals non-linearity that R² can hide.
+              {" "}<b>Back-calculated accuracy</b> reads each level back off the curve and shows its % deviation from the nominal concentration — the analyst-facing counterpart to the residual plot.
+            </p>
             <Card>
               <CardHeader className="pb-2"><CardTitle className="text-xs text-muted-foreground uppercase tracking-wider">Level-by-level evaluation</CardTitle></CardHeader>
               <CardContent>
@@ -1946,6 +2477,7 @@ export default function LabValidatePro() {
               <Stat label="LOD (3·s′₀)" value={fmtSig(lod.lod)} unit={unit} status="pass" />
               <Stat label={`LOQ (${cr.kQ}·s′₀)`} value={fmtSig(lod.loq)} unit={unit} status="pass" />
             </div>
+            <LodDistributionChart lod={lod} kQ={cr.kQ} unit={unit} C={C} />
             {lod.approach === "calibration" ? (
               <WorkSteps steps={[
                 { label: "Uses the residual SD Sy/x and slope b₁ from the Linearity module",
@@ -2011,7 +2543,7 @@ export default function LabValidatePro() {
               <div key={i} className="flex items-center gap-2">
                 <span className="text-[11px] font-data text-muted-foreground w-14 shrink-0">{study.precision.label} {i + 1}</span>
                 <div className="flex-1"><RepGrid values={row} onChange={(v) => { const a = [...g]; a[i] = v; setG(a); }} /></div>
-                <Button variant="ghost" size="sm" className="text-destructive h-8" onClick={() => setG(g.filter((_, k) => k !== i))}><Trash2 className="h-3.5 w-3.5" /></Button>
+                <Button variant="ghost" size="sm" className="text-destructive h-8" onClick={() => askDelete(`This ${study.precision.label.toLowerCase()} group and its replicate values will be removed.`, () => setG(g.filter((_, k) => k !== i)), `Delete this ${study.precision.label.toLowerCase()}?`)}><Trash2 className="h-3.5 w-3.5" /></Button>
               </div>
             ))}
           </CardContent>
@@ -2075,7 +2607,7 @@ export default function LabValidatePro() {
                       <CartesianGrid stroke={C.grid} strokeDasharray="3 3" />
                       <XAxis dataKey="name" tick={{ fontSize: 10, fill: C.axis }} stroke={C.grid} />
                       <YAxis domain={["auto", "auto"]} tick={{ fontSize: 11, fill: C.axis }} stroke={C.grid} />
-                      <RTooltip contentStyle={C.tooltip} formatter={(v) => fmtSig(v)} />
+                      <RTooltip contentStyle={C.tooltip} itemStyle={C.tooltipItem} labelStyle={C.tooltipLabel} formatter={(v) => fmtSig(v)} />
                       <ReferenceLine y={prec.gm} stroke={C.primary} strokeDasharray="4 4" />
                       <Bar dataKey="mean" fill={C.primary} radius={[4, 4, 0, 0]} isAnimationActive={false}>
                         <ErrorBar dataKey="sd" stroke={C.axis} width={3} />
@@ -2085,6 +2617,101 @@ export default function LabValidatePro() {
                 </CardContent>
               </Card>
             </div>
+            {(() => {
+              const label = study.precision.label;
+              const jitter = (i, n) => (n <= 1 ? 0 : ((i / (n - 1)) - 0.5) * 0.5);
+              const strip = [];
+              prec.groups.forEach((g, gi) => g.forEach((v, i) => strip.push({ x: gi + 1 + jitter(i, g.length), y: v, grp: `${label} ${gi + 1}` })));
+              const gmeans = prec.groups.map((g, gi) => ({ x: gi + 1, y: S.mean(g), sd: S.sd(g), grp: `${label} ${gi + 1}`, isMean: true }));
+              const ticks = Array.from({ length: prec.p }, (_, i) => i + 1);
+              const varW = prec.sr ** 2, varB = prec.sBetween ** 2, varT = varW + varB || 1;
+              const rL = +cr.rsdRMax, iL = +cr.rsdIMax;
+              const rsdBars = [
+                { name: "RSDr", measured: prec.rsdR, limit: Number.isFinite(rL) ? rL : 0, ok: !Number.isFinite(rL) || prec.rsdR <= rL },
+                { name: "RSDI", measured: prec.rsdI, limit: Number.isFinite(iL) ? iL : 0, ok: !Number.isFinite(iL) || prec.rsdI <= iL },
+              ];
+              const PrecTip = ({ active, payload }) => {
+                if (!active || !payload || !payload.length) return null;
+                const pt = payload[0].payload;
+                return (
+                  <div style={{ ...C.tooltip, padding: "6px 9px", minWidth: 150 }}>
+                    <div style={{ ...C.tooltipLabel }}>{pt.grp}{pt.isMean ? " — mean" : ""}</div>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 12, ...C.tooltipItem }}><span>{pt.isMean ? "Mean" : "Value"}</span><span style={{ fontVariantNumeric: "tabular-nums" }}>{fmtSig(pt.y, 4)} {unit}</span></div>
+                    {pt.isMean && <div style={{ display: "flex", justifyContent: "space-between", gap: 12, ...C.tooltipItem }}><span>SD</span><span style={{ fontVariantNumeric: "tabular-nums" }}>± {fmtSig(pt.sd, 3)}</span></div>}
+                  </div>
+                );
+              };
+              return (
+                <div className="space-y-4">
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  <Card>
+                    <CardHeader className="pb-1"><CardTitle className="text-xs text-muted-foreground uppercase tracking-wider">Individual values by {label.toLowerCase()}</CardTitle></CardHeader>
+                    <CardContent className="h-[240px]">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <ScatterChart margin={{ top: 8, right: 14, bottom: 4, left: 0 }}>
+                          <CartesianGrid stroke={C.grid} strokeDasharray="3 3" />
+                          <XAxis type="number" dataKey="x" domain={[0.5, prec.p + 0.5]} ticks={ticks} tickFormatter={(t) => `${label} ${t}`} tick={{ fontSize: 10, fill: C.axis }} stroke={C.grid} />
+                          <YAxis type="number" dataKey="y" domain={["auto", "auto"]} tick={{ fontSize: 11, fill: C.axis }} stroke={C.grid} tickFormatter={(v) => fmtSig(v, 3)} />
+                          <RTooltip cursor={{ strokeDasharray: "3 3" }} content={<PrecTip />} />
+                          <ReferenceArea y1={prec.gm - prec.sI} y2={prec.gm + prec.sI} fill={C.primary} fillOpacity={0.07} />
+                          <ReferenceArea y1={prec.gm - prec.sr} y2={prec.gm + prec.sr} fill={C.ok} fillOpacity={0.10} />
+                          <ReferenceLine y={prec.gm} stroke={C.primary} strokeDasharray="4 4" />
+                          <Scatter data={strip} fill={C.violet} fillOpacity={0.55} isAnimationActive={false} />
+                          <Scatter data={gmeans} fill={C.warn} shape="diamond" isAnimationActive={false}>
+                            <ErrorBar dataKey="sd" width={4} strokeWidth={1.4} stroke={C.warn} direction="y" />
+                          </Scatter>
+                        </ScatterChart>
+                      </ResponsiveContainer>
+                    </CardContent>
+                  </Card>
+                  <Card>
+                    <CardHeader className="pb-1"><CardTitle className="text-xs text-muted-foreground uppercase tracking-wider">Variance components</CardTitle></CardHeader>
+                    <CardContent>
+                      <div className="h-[188px]">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <BarChart data={[{ name: "Total σ² (sI²)", within: varW, between: varB }]} margin={{ top: 8, right: 12, bottom: 4, left: 0 }}>
+                            <CartesianGrid stroke={C.grid} strokeDasharray="3 3" />
+                            <XAxis dataKey="name" tick={{ fontSize: 10, fill: C.axis }} stroke={C.grid} />
+                            <YAxis tick={{ fontSize: 11, fill: C.axis }} stroke={C.grid} tickFormatter={(v) => fmtSig(v, 2)} />
+                            <RTooltip contentStyle={C.tooltip} itemStyle={C.tooltipItem} labelStyle={C.tooltipLabel}
+                              formatter={(v, n) => [`${fmtSig(v, 3)} (${fmt((v / varT) * 100, 0)} %)`, n === "within" ? "Repeatability sr²" : "Between-group s²b"]} />
+                            <Bar dataKey="within" stackId="v" fill={C.primary} isAnimationActive={false} />
+                            <Bar dataKey="between" stackId="v" fill={C.violet} radius={[4, 4, 0, 0]} isAnimationActive={false} />
+                          </BarChart>
+                        </ResponsiveContainer>
+                      </div>
+                      <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted-foreground mt-1.5">
+                        <span className="inline-flex items-center gap-1.5"><span className="inline-block h-2.5 w-2.5 rounded-sm" style={{ background: C.primary }} />Repeatability s<sub>r</sub>² · {fmt((varW / varT) * 100, 0)} %</span>
+                        <span className="inline-flex items-center gap-1.5"><span className="inline-block h-2.5 w-2.5 rounded-sm" style={{ background: C.violet }} />Between-{label.toLowerCase()} s²<sub>b</sub> · {fmt((varB / varT) * 100, 0)} %</span>
+                      </div>
+                    </CardContent>
+                  </Card>
+                </div>
+                <Card>
+                  <CardHeader className="pb-1"><CardTitle className="text-xs text-muted-foreground uppercase tracking-wider">Precision vs acceptance limits</CardTitle></CardHeader>
+                  <CardContent className="h-[220px]">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={rsdBars} margin={{ top: 8, right: 12, bottom: 4, left: 0 }} barGap={6}>
+                        <CartesianGrid stroke={C.grid} strokeDasharray="3 3" />
+                        <XAxis dataKey="name" tick={{ fontSize: 11, fill: C.axis }} stroke={C.grid} />
+                        <YAxis tick={{ fontSize: 11, fill: C.axis }} stroke={C.grid} tickFormatter={(v) => v + "%"} />
+                        <RTooltip contentStyle={C.tooltip} itemStyle={C.tooltipItem} labelStyle={C.tooltipLabel} formatter={(v, n) => [fmt(v, 2) + " %", n === "limit" ? "Acceptance limit" : "Measured"]} />
+                        <Bar dataKey="limit" fill={C.grid} radius={[3, 3, 0, 0]} isAnimationActive={false} />
+                        <Bar dataKey="measured" radius={[3, 3, 0, 0]} isAnimationActive={false}>
+                          {rsdBars.map((r, i) => <Cell key={i} fill={r.ok ? C.primary : C.bad} />)}
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </CardContent>
+                </Card>
+                </div>
+              );
+            })()}
+            <p className="text-[11px] leading-relaxed text-muted-foreground">
+              <b>Individual values</b> plots every replicate (purple) grouped by {study.precision.label.toLowerCase()}, with the {study.precision.label.toLowerCase()} means (amber diamonds ± SD), the grand mean (dashed line), and the ±s<sub>r</sub> repeatability (green) and ±s<sub>I</sub> intermediate-precision (teal) bands — tight clusters sitting inside the bands mean good precision.
+              {" "}<b>Variance components</b> shows how the total variance splits into within-{study.precision.label.toLowerCase()} repeatability vs between-{study.precision.label.toLowerCase()} spread — the ANOVA partition behind s<sub>I</sub>.
+              {" "}<b>Precision vs limits</b> compares the measured RSD<sub>r</sub> and RSD<sub>I</sub> (green = within, red = over) against their acceptance limits (grey).
+            </p>
             <Card>
               <CardHeader className="pb-3"><CardTitle className="text-sm">Reproducibility (inter-laboratory) &amp; Horwitz / HorRat</CardTitle></CardHeader>
               <CardContent className="space-y-4">
@@ -2308,7 +2935,7 @@ export default function LabValidatePro() {
                       <CartesianGrid stroke={C.grid} strokeDasharray="3 3" />
                       <XAxis dataKey="name" tick={{ fontSize: 10, fill: C.axis }} stroke={C.grid} />
                       <YAxis domain={["auto", "auto"]} tick={{ fontSize: 11, fill: C.axis }} stroke={C.grid} />
-                      <RTooltip contentStyle={C.tooltip} formatter={(v) => fmtSig(v)} />
+                      <RTooltip contentStyle={C.tooltip} itemStyle={C.tooltipItem} labelStyle={C.tooltipLabel} formatter={(v) => fmtSig(v)} />
                       <Bar dataKey="mean" fill={C.primary} radius={[4, 4, 0, 0]} isAnimationActive={false}>
                         <ErrorBar dataKey="sd" stroke={C.axis} width={3} />
                       </Bar>
@@ -2317,6 +2944,91 @@ export default function LabValidatePro() {
                 </CardContent>
               </Card>
             </div>
+
+            {(() => {
+              const nameA = d.labelA || "A", nameB = d.labelB || "B";
+              const jitter = (i, n) => (n <= 1 ? 0 : ((i / (n - 1)) - 0.5) * 0.5);
+              const stripA = comp.a.map((v, i) => ({ x: v, y: 1 + jitter(i, comp.a.length), set: nameA }));
+              const stripB = comp.b.map((v, i) => ({ x: v, y: 2 + jitter(i, comp.b.length), set: nameB }));
+              const meanPts = [
+                { x: comp.tt.m1, y: 1, sd: comp.f.sa, set: nameA, isMean: true },
+                { x: comp.tt.m2, y: 2, sd: comp.f.sb, set: nameB, isMean: true },
+              ];
+              const diff = comp.tt.diff, ciHalf = comp.tt.tCrit * comp.tt.se;
+              const dLo = Math.min(0, diff - ciHalf), dHi = Math.max(0, diff + ciHalf);
+              const pad = (dHi - dLo) * 0.2 || Math.abs(diff) || 1;
+              const StripTip = ({ active, payload }) => {
+                if (!active || !payload || !payload.length) return null;
+                const p = payload[0].payload;
+                return (
+                  <div style={{ ...C.tooltip, padding: "6px 9px", minWidth: 150 }}>
+                    <div style={{ ...C.tooltipLabel }}>{p.set}{p.isMean ? " — mean" : ""}</div>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 12, ...C.tooltipItem }}><span>{p.isMean ? "Mean" : "Value"}</span><span style={{ fontVariantNumeric: "tabular-nums" }}>{fmtSig(p.x, 4)} {unit}</span></div>
+                    {p.isMean && <div style={{ display: "flex", justifyContent: "space-between", gap: 12, ...C.tooltipItem }}><span>SD</span><span style={{ fontVariantNumeric: "tabular-nums" }}>± {fmtSig(p.sd, 3)}</span></div>}
+                  </div>
+                );
+              };
+              const DiffTip = ({ active, payload }) => {
+                if (!active || !payload || !payload.length) return null;
+                const p = payload[0].payload;
+                return (
+                  <div style={{ ...C.tooltip, padding: "6px 9px", minWidth: 176 }}>
+                    <div style={{ ...C.tooltipLabel }}>Difference ({nameA} − {nameB})</div>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 12, ...C.tooltipItem }}><span>Difference</span><span style={{ fontVariantNumeric: "tabular-nums" }}>{fmtSig(p.x, 3)} {unit}</span></div>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 12, ...C.tooltipItem }}><span>95 % CI</span><span style={{ fontVariantNumeric: "tabular-nums" }}>{fmtSig(p.x - p.err, 3)} … {fmtSig(p.x + p.err, 3)}</span></div>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 12, ...C.tooltipItem }}><span>Verdict</span><span style={{ color: comp.tt.significant ? C.warn : C.ok, fontWeight: 600 }}>{comp.tt.significant ? "means differ" : "no difference"}</span></div>
+                  </div>
+                );
+              };
+              return (
+                <div className="space-y-4">
+                <FDistributionChart df1={comp.f.df1} df2={comp.f.df2} F={comp.f.F} fCrit={comp.f.fCrit} significant={comp.f.significant} C={C} />
+                <div>
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  <Card>
+                    <CardHeader className="pb-1"><CardTitle className="text-xs text-muted-foreground uppercase tracking-wider">Data spread (each replicate)</CardTitle></CardHeader>
+                    <CardContent className="h-[230px]">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <ScatterChart margin={{ top: 8, right: 18, bottom: 4, left: 10 }}>
+                          <CartesianGrid stroke={C.grid} strokeDasharray="3 3" />
+                          <XAxis type="number" dataKey="x" domain={["auto", "auto"]} tick={{ fontSize: 10, fill: C.axis }} stroke={C.grid} tickFormatter={(v) => fmtSig(v, 3)} />
+                          <YAxis type="number" dataKey="y" domain={[0.5, 2.5]} ticks={[1, 2]} width={96} tick={{ fontSize: 10, fill: C.axis }} stroke={C.grid} tickFormatter={(t) => (t === 1 ? nameA : t === 2 ? nameB : "")} />
+                          <RTooltip cursor={{ strokeDasharray: "3 3" }} content={<StripTip />} />
+                          <Scatter data={stripA} fill={C.primary} fillOpacity={0.6} />
+                          <Scatter data={stripB} fill={C.violet} fillOpacity={0.6} />
+                          <Scatter data={meanPts} fill={C.warn} shape="diamond">
+                            <ErrorBar dataKey="sd" width={4} strokeWidth={1.5} stroke={C.warn} direction="x" />
+                          </Scatter>
+                        </ScatterChart>
+                      </ResponsiveContainer>
+                    </CardContent>
+                  </Card>
+                  <Card>
+                    <CardHeader className="pb-1"><CardTitle className="text-xs text-muted-foreground uppercase tracking-wider">Difference in means ± 95 % CI</CardTitle></CardHeader>
+                    <CardContent className="h-[230px]">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <ScatterChart margin={{ top: 8, right: 22, bottom: 4, left: 10 }}>
+                          <CartesianGrid stroke={C.grid} strokeDasharray="3 3" />
+                          <XAxis type="number" dataKey="x" domain={[dLo - pad, dHi + pad]} tick={{ fontSize: 10, fill: C.axis }} stroke={C.grid} tickFormatter={(v) => fmtSig(v, 3)} />
+                          <YAxis type="number" dataKey="y" domain={[0, 2]} ticks={[1]} width={96} tick={{ fontSize: 10, fill: C.axis }} stroke={C.grid} tickFormatter={() => `${nameA} − ${nameB}`} />
+                          <RTooltip cursor={{ strokeDasharray: "3 3" }} content={<DiffTip />} />
+                          <ReferenceLine x={0} stroke={C.ok} strokeDasharray="4 4" label={{ value: "no difference", position: "top", fontSize: 9, fill: C.ok }} />
+                          <Scatter data={[{ x: diff, y: 1, err: ciHalf }]} fill={comp.tt.significant ? C.warn : C.ok}>
+                            <ErrorBar dataKey="err" width={6} strokeWidth={1.6} stroke={comp.tt.significant ? C.warn : C.ok} direction="x" />
+                          </Scatter>
+                        </ScatterChart>
+                      </ResponsiveContainer>
+                    </CardContent>
+                  </Card>
+                </div>
+                <p className="text-[11px] leading-relaxed text-muted-foreground mt-2">
+                  <b>Data spread</b> plots every replicate (teal = {nameA}, purple = {nameB}); the amber diamonds are the group means with ±1 SD whiskers — wide separation with little overlap signals a real difference.
+                  {" "}<b>Difference ± 95 % CI</b> shows the mean gap {nameA} − {nameB}: when the interval crosses the dashed “no difference” line at 0, the t-test is not significant.
+                </p>
+                </div>
+                </div>
+              );
+            })()}
           </>
         )}
 
@@ -2335,6 +3047,50 @@ export default function LabValidatePro() {
               { label: "2. One-sample t vs the reference value", formula: `t = |x̄ − µ₀| / SE = |${fmtSig(comp.mean)} − ${fmtSig(comp.ref)}| / ${fmtSig(comp.se)} = ${fmt(comp.t, 3)}` },
               { label: "3. Decision", formula: `t = ${fmt(comp.t, 3)}   ${comp.t > comp.tCrit ? ">" : "≤"}   t crit(${comp.df}) = ${fmt(comp.tCrit, 3)}  →  ${comp.significant ? "differs from the reference" : "consistent with the reference"}` },
             ]} />
+            {(() => {
+              const nameA = d.labelA || "Data set";
+              const jitter = (i, n) => (n <= 1 ? 0 : ((i / (n - 1)) - 0.5) * 0.5);
+              const pts = comp.a.map((v, i) => ({ x: v, y: 1 + jitter(i, comp.a.length) }));
+              const ciHalf = comp.tCrit * comp.se;
+              const xs = [...comp.a, comp.ref, comp.mean - ciHalf, comp.mean + ciHalf];
+              const lo = Math.min(...xs), hi = Math.max(...xs), pad = (hi - lo) * 0.15 || 1;
+              const OneTip = ({ active, payload }) => {
+                if (!active || !payload || !payload.length) return null;
+                const p = payload[0].payload;
+                return (
+                  <div style={{ ...C.tooltip, padding: "6px 9px", minWidth: 150 }}>
+                    <div style={{ ...C.tooltipLabel }}>{p.isMean ? "Mean ± 95 % CI" : "Replicate"}</div>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 12, ...C.tooltipItem }}><span>{p.isMean ? "Mean" : "Value"}</span><span style={{ fontVariantNumeric: "tabular-nums" }}>{fmtSig(p.x, 4)} {unit}</span></div>
+                    {p.isMean && <div style={{ display: "flex", justifyContent: "space-between", gap: 12, ...C.tooltipItem }}><span>95 % CI</span><span style={{ fontVariantNumeric: "tabular-nums" }}>± {fmtSig(p.err, 3)}</span></div>}
+                  </div>
+                );
+              };
+              return (
+                <Card>
+                  <CardHeader className="pb-1"><CardTitle className="text-xs text-muted-foreground uppercase tracking-wider">Data vs reference value</CardTitle></CardHeader>
+                  <CardContent className="h-[200px]">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <ScatterChart margin={{ top: 12, right: 22, bottom: 4, left: 10 }}>
+                        <CartesianGrid stroke={C.grid} strokeDasharray="3 3" />
+                        <XAxis type="number" dataKey="x" domain={[lo - pad, hi + pad]} tick={{ fontSize: 10, fill: C.axis }} stroke={C.grid} tickFormatter={(v) => fmtSig(v, 3)} />
+                        <YAxis type="number" dataKey="y" domain={[0.4, 1.6]} ticks={[1]} width={96} tick={{ fontSize: 10, fill: C.axis }} stroke={C.grid} tickFormatter={() => nameA} />
+                        <RTooltip cursor={{ strokeDasharray: "3 3" }} content={<OneTip />} />
+                        <ReferenceLine x={comp.ref} stroke={C.violet} strokeDasharray="4 4" label={{ value: "reference", position: "top", fontSize: 9, fill: C.violet }} />
+                        <Scatter data={pts} fill={C.primary} fillOpacity={0.6} />
+                        <Scatter data={[{ x: comp.mean, y: 1, err: ciHalf, isMean: true }]} fill={comp.significant ? C.warn : C.ok} shape="diamond">
+                          <ErrorBar dataKey="err" width={5} strokeWidth={1.6} stroke={comp.significant ? C.warn : C.ok} direction="x" />
+                        </Scatter>
+                      </ScatterChart>
+                    </ResponsiveContainer>
+                  </CardContent>
+                  <CardContent className="pt-0">
+                    <p className="text-[11px] leading-relaxed text-muted-foreground">
+                      Teal dots are the replicates; the diamond is the mean with its 95 % CI whiskers. If the dashed <b>reference</b> line falls inside the whiskers, the mean is statistically consistent with the reference value.
+                    </p>
+                  </CardContent>
+                </Card>
+              );
+            })()}
             <Card>
               <CardContent className="pt-4">
                 <p className="text-[13px] leading-relaxed">
@@ -2383,6 +3139,10 @@ export default function LabValidatePro() {
                 <Stat label="Recovery" value={fmt(trueness.recovery, 1)} unit="%" />
                 <Stat label="t / t crit" value={`${fmt(trueness.t, 2)} / ${fmt(trueness.tCrit, 2)}`} status={trueness.significant ? "fail" : "pass"} />
               </div>
+            )}
+            {trueness?.mode === "crm" && (
+              <TruenessDistributionChart mean={trueness.mean} sd={trueness.sd} refVal={num(d.crmRef)}
+                refU={num(d.crmU)} bias={trueness.bias} unit={unit} C={C} />
             )}
             {trueness?.mode === "crm" && (() => {
               const ref = num(d.crmRef);
@@ -2454,6 +3214,11 @@ export default function LabValidatePro() {
               </div>
             )}
             {trueness?.mode === "spike" && (
+              <RecoveryDistributionChart recovery={trueness.recovery} sdRec={trueness.sdRec}
+                tCrit={trueness.tCrit} significant={trueness.significant}
+                recMin={num(cr.recMin)} recMax={num(cr.recMax)} C={C} />
+            )}
+            {trueness?.mode === "spike" && (
               <WorkSteps steps={
                 trueness.method === "volume"
                   ? [
@@ -2496,7 +3261,53 @@ export default function LabValidatePro() {
   const RecoveryModule = () => {
     const L = study.recovery.levels;
     const setL = (v) => up("recovery", { levels: v });
-    const chartData = rec.map((r) => ({ conc: `${r.conc}`, recovery: r.recovery }));
+    const recMin = num(cr.recMin) ?? 80;
+    const recMax = num(cr.recMax) ?? 120;
+    const yLo = Math.min(60, recMin - 10);
+    const yHi = Math.max(140, recMax + 10);
+    // Per-level mean recovery — drives the summary bar chart.
+    const barData = rec.map((r) => ({ conc: `${r.conc}`, recovery: r.recovery }));
+    // Every replicate's recovery in run order, grouped by fortification level —
+    // drives the zig-zag control chart.
+    const runData = [];
+    const levelBounds = [];
+    study.recovery.levels.forEach((lv) => {
+      const conc = num(lv.conc);
+      const reps = clean(lv.reps);
+      if (!conc || reps.length < 1) return;
+      const start = runData.length + 1;
+      reps.forEach((v, j) => runData.push({ seq: runData.length + 1, recovery: (v / conc) * 100, level: conc, rep: j + 1 }));
+      levelBounds.push({ conc, start, end: runData.length, mid: (start + runData.length) / 2 });
+    });
+    const inWin = (r) => r >= recMin && r <= recMax;
+    const groupTicks = levelBounds.map((b) => b.mid);
+    const RunDot = ({ cx, cy, payload }) => {
+      if (cx == null || cy == null) return null;
+      const color = inWin(payload.recovery) ? C.primary : C.bad;
+      const s = 3.6;
+      return (
+        <g stroke={color} strokeWidth={1.9} strokeLinecap="round">
+          <line x1={cx - s} y1={cy - s} x2={cx + s} y2={cy + s} />
+          <line x1={cx - s} y1={cy + s} x2={cx + s} y2={cy - s} />
+        </g>
+      );
+    };
+    const RunTooltip = ({ active, payload }) => {
+      if (!active || !payload || !payload.length) return null;
+      const p = payload[0].payload;
+      const ok = inWin(p.recovery);
+      return (
+        <div style={{ ...C.tooltip, padding: "6px 9px", minWidth: 150 }}>
+          <div style={{ ...C.tooltipLabel }}>{fmt(p.level, 2)} {unit} · rep {p.rep}</div>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, ...C.tooltipItem }}>
+            <span>Recovery</span><span style={{ fontVariantNumeric: "tabular-nums" }}>{fmt(p.recovery, 1)} %</span>
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, ...C.tooltipItem }}>
+            <span>Status</span><span style={{ color: ok ? C.ok : C.bad, fontWeight: 600 }}>{ok ? "In window" : "Out of window"}</span>
+          </div>
+        </div>
+      );
+    };
     return (
       <div className="space-y-4">
         <GuideNote>
@@ -2519,44 +3330,100 @@ export default function LabValidatePro() {
                   <span className="text-[11px] text-muted-foreground">{unit}</span>
                 </div>
                 <div className="flex-1 min-w-[240px]"><RepGrid values={lv.reps} onChange={(v) => { const a = [...L]; a[i] = { ...lv, reps: v }; setL(a); }} /></div>
-                <Button variant="ghost" size="sm" className="text-destructive h-8" onClick={() => setL(L.filter((_, k) => k !== i))}><Trash2 className="h-3.5 w-3.5" /></Button>
+                <Button variant="ghost" size="sm" className="text-destructive h-8" onClick={() => askDelete("This fortification level and its replicate results will be removed.", () => setL(L.filter((_, k) => k !== i)), "Delete this level?")}><Trash2 className="h-3.5 w-3.5" /></Button>
               </div>
             ))}
           </CardContent>
         </Card>
         {rec.length > 0 && (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <Card>
+                <CardHeader className="pb-2"><CardTitle className="text-xs text-muted-foreground uppercase tracking-wider">Results</CardTitle></CardHeader>
+                <CardContent>
+                  <DataTable headers={["Level", "n", "Mean", "SD", "RSD %", "Recovery %", ""]}
+                    rows={rec.map((r) => [
+                      `${fmt(r.conc, 2)} ${unit}`, r.n, fmtSig(r.mean), fmtSig(r.sd, 3), fmt(r.rsd, 2), fmt(r.recovery, 1),
+                      <StatusBadge key="s" s={r.recovery >= cr.recMin && r.recovery <= cr.recMax ? "pass" : "fail"} />,
+                    ])} />
+                </CardContent>
+              </Card>
+              <Card>
+                <CardHeader className="pb-1"><CardTitle className="text-xs text-muted-foreground uppercase tracking-wider">Recovery vs level (mean)</CardTitle></CardHeader>
+                <CardContent className="h-[230px]">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={barData} margin={{ top: 8, right: 12, bottom: 4, left: 0 }}>
+                      <CartesianGrid stroke={C.grid} strokeDasharray="3 3" />
+                      <XAxis dataKey="conc" tick={{ fontSize: 11, fill: C.axis }} stroke={C.grid} />
+                      <YAxis domain={[yLo, yHi]} tick={{ fontSize: 11, fill: C.axis }} stroke={C.grid} />
+                      <RTooltip contentStyle={C.tooltip} itemStyle={C.tooltipItem} labelStyle={C.tooltipLabel} formatter={(v) => fmt(v, 1) + " %"} />
+                      <ReferenceArea y1={recMin} y2={recMax} fill={C.ok} fillOpacity={0.08} />
+                      <ReferenceLine y={100} stroke={C.ok} strokeDasharray="4 4" />
+                      <ReferenceLine y={recMin} stroke={C.warn} strokeDasharray="3 3" />
+                      <ReferenceLine y={recMax} stroke={C.warn} strokeDasharray="3 3" />
+                      <Bar dataKey="recovery" radius={[4, 4, 0, 0]} isAnimationActive={false}>
+                        {barData.map((r, i) => <Cell key={i} fill={r.recovery >= recMin && r.recovery <= recMax ? C.primary : C.bad} />)}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                </CardContent>
+              </Card>
+            </div>
             <Card>
-              <CardHeader className="pb-2"><CardTitle className="text-xs text-muted-foreground uppercase tracking-wider">Results</CardTitle></CardHeader>
-              <CardContent>
-                <DataTable headers={["Level", "n", "Mean", "SD", "RSD %", "Recovery %", ""]}
-                  rows={rec.map((r) => [
-                    `${fmt(r.conc, 2)} ${unit}`, r.n, fmtSig(r.mean), fmtSig(r.sd, 3), fmt(r.rsd, 2), fmt(r.recovery, 1),
-                    <StatusBadge key="s" s={r.recovery >= cr.recMin && r.recovery <= cr.recMax ? "pass" : "fail"} />,
-                  ])} />
-              </CardContent>
-            </Card>
-            <Card>
-              <CardHeader className="pb-1"><CardTitle className="text-xs text-muted-foreground uppercase tracking-wider">Recovery vs level</CardTitle></CardHeader>
-              <CardContent className="h-[230px]">
+              <CardHeader className="pb-1"><CardTitle className="text-xs text-muted-foreground uppercase tracking-wider">Recovery control chart</CardTitle></CardHeader>
+              <CardContent className="h-[300px]">
                 <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={chartData} margin={{ top: 8, right: 12, bottom: 4, left: 0 }}>
-                    <CartesianGrid stroke={C.grid} strokeDasharray="3 3" />
-                    <XAxis dataKey="conc" tick={{ fontSize: 11, fill: C.axis }} stroke={C.grid} />
-                    <YAxis domain={[Math.min(60, cr.recMin - 10), Math.max(140, cr.recMax + 10)]} tick={{ fontSize: 11, fill: C.axis }} stroke={C.grid} />
-                    <RTooltip contentStyle={C.tooltip} formatter={(v) => fmt(v, 1) + " %"} />
-                    <ReferenceArea y1={cr.recMin} y2={cr.recMax} fill={C.ok} fillOpacity={0.08} />
-                    <ReferenceLine y={100} stroke={C.ok} strokeDasharray="4 4" />
-                    <ReferenceLine y={cr.recMin} stroke={C.warn} strokeDasharray="3 3" />
-                    <ReferenceLine y={cr.recMax} stroke={C.warn} strokeDasharray="3 3" />
-                    <Bar dataKey="recovery" radius={[4, 4, 0, 0]} isAnimationActive={false}>
-                      {chartData.map((r, i) => <Cell key={i} fill={r.recovery >= cr.recMin && r.recovery <= cr.recMax ? C.primary : C.bad} />)}
-                    </Bar>
-                  </BarChart>
+                  <LineChart data={runData} margin={{ top: 22, right: 54, bottom: 18, left: 4 }}>
+                    <CartesianGrid stroke={C.grid} strokeDasharray="3 3" vertical={false} />
+                    <XAxis dataKey="seq" type="number" domain={[0.5, runData.length + 0.5]} ticks={groupTicks}
+                      tickFormatter={(t) => { const b = levelBounds.find((g) => g.mid === t); return b ? `${fmt(b.conc, 2)} ${unit}` : ""; }}
+                      tick={{ fontSize: 10, fill: C.axis }} stroke={C.grid}
+                      label={{ value: "Fortification level", position: "insideBottom", offset: -8, fontSize: 10, fill: C.axis }} />
+                    <YAxis domain={[yLo, yHi]} tick={{ fontSize: 11, fill: C.axis }} stroke={C.grid} />
+                    <RTooltip content={<RunTooltip />} cursor={{ stroke: C.axis, strokeDasharray: "3 3" }} isAnimationActive={false} />
+                    {/* action areas outside the acceptance window */}
+                    <ReferenceArea y1={recMax} y2={yHi} fill={C.bad} fillOpacity={0.09} stroke="none"
+                      label={{ value: "Action area", position: "insideTop", fontSize: 9, fill: C.bad }} />
+                    <ReferenceArea y1={yLo} y2={recMin} fill={C.bad} fillOpacity={0.09} stroke="none"
+                      label={{ value: "Action area", position: "insideBottom", fontSize: 9, fill: C.bad }} />
+                    {/* fortification-level separators */}
+                    {levelBounds.slice(1).map((b, i) => <ReferenceLine key={`sep${i}`} x={b.start - 0.5} stroke={C.grid} strokeDasharray="2 4" />)}
+                    {/* control lines: upper / target / lower */}
+                    <ReferenceLine y={recMax} stroke={C.warn} strokeDasharray="5 3"
+                      label={{ value: `${fmt(recMax, 0)}%`, position: "right", fontSize: 9, fill: C.warn }} />
+                    <ReferenceLine y={100} stroke={C.ok} strokeDasharray="4 4"
+                      label={{ value: "100%", position: "right", fontSize: 9, fill: C.ok }} />
+                    <ReferenceLine y={recMin} stroke={C.warn} strokeDasharray="5 3"
+                      label={{ value: `${fmt(recMin, 0)}%`, position: "right", fontSize: 9, fill: C.warn }} />
+                    <Line dataKey="recovery" stroke={C.primary} strokeWidth={1.8} dot={<RunDot />} isAnimationActive={false} connectNulls />
+                  </LineChart>
                 </ResponsiveContainer>
               </CardContent>
             </Card>
-          </div>
+            <p className="text-[11px] leading-relaxed text-muted-foreground">
+              Each <b>×</b> is one replicate's recovery, plotted in run order and grouped by fortification level (low → high). The line
+              zig-zags between them. The green centre line is the <b>100 %</b> target; the amber lines are the <b>{fmt(recMin, 0)}–{fmt(recMax, 0)} %</b>
+              {" "}acceptance limits. A point that strays into the red <b>action area</b> (turning red) is out of specification and must be investigated.
+            </p>
+            {(() => {
+              const steps = [
+                { label: "1. For each fortification level, average the replicate results and measure their scatter",
+                  formula: "x̄ = Σx / n     s = √[ Σ(x − x̄)² / (n − 1) ]     RSD % = s / x̄ × 100" },
+                { label: "2. Recovery is the measured mean expressed as a percentage of the amount fortified (nominal)",
+                  formula: "Recovery % = (x̄ / nominal) × 100",
+                  note: `Acceptable when Recovery % is within ${cr.recMin}–${cr.recMax} % (editable in Study Plan).` },
+                ...rec.map((r, i) => {
+                  const ok = r.recovery >= cr.recMin && r.recovery <= cr.recMax;
+                  return {
+                    label: `${i + 3}. ${fmt(r.conc, 2)} ${unit} level  (n = ${r.n})`,
+                    formula: `x̄ = ${fmtSig(r.mean)} ${unit}    s = ${fmtSig(r.sd, 3)}    RSD = ${fmt(r.rsd, 2)} %\nRecovery = ${fmtSig(r.mean)} / ${fmtSig(r.conc)} × 100 = ${fmt(r.recovery, 1)} %`,
+                    note: `${fmt(r.recovery, 1)} % ${ok ? "within" : "outside"} ${cr.recMin}–${cr.recMax} %  →  ${ok ? "pass" : "fail — investigate"}`,
+                  };
+                }),
+              ];
+              return <WorkSteps steps={steps} title="Show how Recovery % is calculated" />;
+            })()}
+          </>
         )}
       </div>
     );
@@ -2590,13 +3457,14 @@ export default function LabValidatePro() {
                   <Field label={i === 0 ? "High" : ""} value={f.high} onChange={(e) => set({ high: e.target.value })} />
                   <Field label={i === 0 ? "Result @low" : ""} type="number" step="any" value={f.resLow} onChange={(e) => set({ resLow: e.target.value === "" ? "" : +e.target.value })} />
                   <Field label={i === 0 ? "Result @high" : ""} type="number" step="any" value={f.resHigh} onChange={(e) => set({ resHigh: e.target.value === "" ? "" : +e.target.value })} />
-                  <Button variant="ghost" size="sm" className="text-destructive h-9" onClick={() => setF(F.filter((_, k) => k !== i))}><Trash2 className="h-4 w-4" /></Button>
+                  <Button variant="ghost" size="sm" className="text-destructive h-9" onClick={() => askDelete("This ruggedness factor and its low / high results will be removed.", () => setF(F.filter((_, k) => k !== i)), "Delete this factor?")}><Trash2 className="h-4 w-4" /></Button>
                 </div>
               );
             })}
           </CardContent>
         </Card>
         {robust.length > 0 && (
+          <>
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             <Card>
               <CardHeader className="pb-2"><CardTitle className="text-xs text-muted-foreground uppercase tracking-wider">Effect evaluation</CardTitle></CardHeader>
@@ -2618,7 +3486,7 @@ export default function LabValidatePro() {
                     <CartesianGrid stroke={C.grid} strokeDasharray="3 3" />
                     <XAxis type="number" tick={{ fontSize: 11, fill: C.axis }} stroke={C.grid} />
                     <YAxis type="category" dataKey="name" width={110} tick={{ fontSize: 10, fill: C.axis }} stroke={C.grid} />
-                    <RTooltip contentStyle={C.tooltip} formatter={(v) => fmt(v, 2) + " %"} />
+                    <RTooltip contentStyle={C.tooltip} itemStyle={C.tooltipItem} labelStyle={C.tooltipLabel} formatter={(v) => fmt(v, 2) + " %"} />
                     <ReferenceLine x={+cr.robustPctMax} stroke={C.warn} strokeDasharray="4 4" />
                     <ReferenceLine x={-cr.robustPctMax} stroke={C.warn} strokeDasharray="4 4" />
                     <Bar dataKey="effect" radius={[0, 4, 4, 0]} isAnimationActive={false}>
@@ -2629,6 +3497,122 @@ export default function LabValidatePro() {
               </CardContent>
             </Card>
           </div>
+          {(() => {
+            const rob = +cr.robustPctMax;
+            // Sensitivity (tornado): the result span low → high for each factor, largest swing first.
+            const results = robust.flatMap((r) => [num(r.resLow), num(r.resHigh)]).filter((x) => x !== null);
+            const gmR = results.length ? results.reduce((a, b) => a + b, 0) / results.length : 0;
+            const tornado = [...robust]
+              .sort((a, b) => Math.abs(b.effect) - Math.abs(a.effect))
+              .map((r) => {
+                const lo = num(r.resLow), hi = num(r.resHigh);
+                return { name: r.name || "—", range: [Math.min(lo, hi), Math.max(lo, hi)], lo, hi, effect: r.effect, effectPct: r.effectPct, ok: Math.abs(r.effectPct) <= rob };
+              });
+            // Significance: |effect| compared with the repeatability critical difference (needs the Precision module).
+            const n = prec ? prec.N / prec.p : null;
+            const cd = prec ? prec.sr * S.tCrit95(prec.dfw) * Math.SQRT2 / Math.sqrt(n) : null;
+            const sig = prec ? [...robust]
+              .sort((a, b) => Math.abs(b.effect) - Math.abs(a.effect))
+              .map((r) => ({ name: r.name || "—", absEffect: Math.abs(r.effect), significant: r.srTest })) : [];
+            const TornadoTip = ({ active, payload }) => {
+              if (!active || !payload || !payload.length) return null;
+              const p = payload[0].payload;
+              return (
+                <div style={{ ...C.tooltip, padding: "6px 9px", minWidth: 168 }}>
+                  <div style={{ ...C.tooltipLabel }}>{p.name}</div>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 12, ...C.tooltipItem }}><span>Result @low</span><span style={{ fontVariantNumeric: "tabular-nums" }}>{fmtSig(p.lo, 4)}</span></div>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 12, ...C.tooltipItem }}><span>Result @high</span><span style={{ fontVariantNumeric: "tabular-nums" }}>{fmtSig(p.hi, 4)}</span></div>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 12, ...C.tooltipItem }}><span>Effect</span><span style={{ fontVariantNumeric: "tabular-nums" }}>{fmtSig(p.effect, 3)} ({fmt(p.effectPct, 2)} %)</span></div>
+                </div>
+              );
+            };
+            const SigTip = ({ active, payload }) => {
+              if (!active || !payload || !payload.length) return null;
+              const p = payload[0].payload;
+              return (
+                <div style={{ ...C.tooltip, padding: "6px 9px", minWidth: 168 }}>
+                  <div style={{ ...C.tooltipLabel }}>{p.name}</div>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 12, ...C.tooltipItem }}><span>|Effect|</span><span style={{ fontVariantNumeric: "tabular-nums" }}>{fmtSig(p.absEffect, 3)}</span></div>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 12, ...C.tooltipItem }}><span>Crit. difference</span><span style={{ fontVariantNumeric: "tabular-nums" }}>{fmtSig(cd, 3)}</span></div>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 12, ...C.tooltipItem }}><span>Verdict</span><span style={{ color: p.significant ? C.warn : C.ok, fontWeight: 600 }}>{p.significant ? "significant" : "within noise"}</span></div>
+                </div>
+              );
+            };
+            return (
+              <div>
+              <div className={`grid grid-cols-1 ${prec ? "lg:grid-cols-2" : ""} gap-4`}>
+                <Card>
+                  <CardHeader className="pb-1"><CardTitle className="text-xs text-muted-foreground uppercase tracking-wider">Sensitivity — result span (low → high)</CardTitle></CardHeader>
+                  <CardContent className="h-[230px]">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={tornado} layout="vertical" margin={{ top: 12, right: 24, bottom: 4, left: 10 }}>
+                        <CartesianGrid stroke={C.grid} strokeDasharray="3 3" />
+                        <XAxis type="number" domain={["auto", "auto"]} tick={{ fontSize: 10, fill: C.axis }} stroke={C.grid} tickFormatter={(v) => fmtSig(v, 3)} />
+                        <YAxis type="category" dataKey="name" width={110} tick={{ fontSize: 10, fill: C.axis }} stroke={C.grid} />
+                        <RTooltip content={<TornadoTip />} cursor={{ fill: C.grid, fillOpacity: 0.15 }} />
+                        <ReferenceLine x={gmR} stroke={C.ok} strokeDasharray="4 4" label={{ value: "mean", position: "top", fontSize: 9, fill: C.ok }} />
+                        <Bar dataKey="range" radius={[3, 3, 3, 3]} barSize={16} isAnimationActive={false}>
+                          {tornado.map((r, i) => <Cell key={i} fill={r.ok ? C.primary : C.warn} />)}
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </CardContent>
+                </Card>
+                {prec && (
+                  <Card>
+                    <CardHeader className="pb-1"><CardTitle className="text-xs text-muted-foreground uppercase tracking-wider">|Effect| vs repeatability noise</CardTitle></CardHeader>
+                    <CardContent className="h-[230px]">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={sig} layout="vertical" margin={{ top: 12, right: 24, bottom: 4, left: 10 }}>
+                          <CartesianGrid stroke={C.grid} strokeDasharray="3 3" />
+                          <XAxis type="number" domain={[0, (dMax) => Math.max(dMax, cd) * 1.1]} tick={{ fontSize: 10, fill: C.axis }} stroke={C.grid} tickFormatter={(v) => fmtSig(v, 2)} />
+                          <YAxis type="category" dataKey="name" width={110} tick={{ fontSize: 10, fill: C.axis }} stroke={C.grid} />
+                          <RTooltip content={<SigTip />} cursor={{ fill: C.grid, fillOpacity: 0.15 }} />
+                          <ReferenceLine x={cd} stroke={C.warn} strokeDasharray="4 4" label={{ value: "crit. diff.", position: "top", fontSize: 9, fill: C.warn }} />
+                          <Bar dataKey="absEffect" radius={[0, 4, 4, 0]} barSize={16} isAnimationActive={false}>
+                            {sig.map((r, i) => <Cell key={i} fill={r.significant ? C.warn : C.primary} />)}
+                          </Bar>
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </CardContent>
+                  </Card>
+                )}
+              </div>
+              <p className="text-[11px] leading-relaxed text-muted-foreground mt-2">
+                <b>Sensitivity</b> shows the result span as each factor moves from its low → high setting (widest bar = most influential), sorted by effect size; the dashed line marks the mean of all results.
+                {prec && <> <b>|Effect| vs noise</b> compares each effect with the repeatability critical difference — a bar reaching past the dashed line is statistically distinguishable from repeatability noise.</>}
+              </p>
+              </div>
+            );
+          })()}
+          {(() => {
+            const rob = +cr.robustPctMax;
+            const n = prec ? prec.N / prec.p : null;
+            const cd = prec ? prec.sr * S.tCrit95(prec.dfw) * Math.SQRT2 / Math.sqrt(n) : null;
+            const steps = [
+              { label: "1. For each factor, the effect is the change in result when the parameter moves from its low to its high setting",
+                formula: "Effect = Result@high − Result@low" },
+              { label: "2. Express the effect against the mid-point response so factors on different scales stay comparable",
+                formula: "mid = (Result@high + Result@low) / 2\nEffect % = Effect / mid × 100",
+                note: `Negligible when |Effect %| ≤ ${rob} % (editable acceptance limit).` },
+              ...robust.map((r, i) => {
+                const mid = (num(r.resHigh) + num(r.resLow)) / 2;
+                const ok = Math.abs(r.effectPct) <= rob;
+                return {
+                  label: `${i + 3}. ${r.name || "Factor " + (i + 1)}`,
+                  formula: `Effect = ${fmtSig(num(r.resHigh), 4)} − ${fmtSig(num(r.resLow), 4)} = ${fmtSig(r.effect, 3)}\nEffect % = ${fmtSig(r.effect, 3)} / ${fmtSig(mid, 4)} × 100 = ${fmt(r.effectPct, 2)} %`,
+                  note: `|${fmt(r.effectPct, 2)} %| ${ok ? "≤" : ">"} ${rob} %  →  ${ok ? "negligible (pass)" : "significant — control this parameter and state its tolerance in the SOP"}`,
+                };
+              }),
+              prec && {
+                label: `${robust.length + 3}. "vs sr" check — is the effect larger than repeatability noise?`,
+                formula: `CD = s_r · t(${prec.dfw}, 95%) · √2 / √n = ${fmtSig(prec.sr, 3)} · ${fmt(S.tCrit95(prec.dfw), 2)} · √2 / √${fmt(n, 0)} = ${fmtSig(cd, 3)}`,
+                note: `An |effect| above the critical difference CD is statistically distinguishable from repeatability ("significant"); at or below it the change is "within noise".`,
+              },
+            ];
+            return <WorkSteps steps={steps} title="Show how Effect % is calculated" />;
+          })()}
+          </>
         )}
       </div>
     );
@@ -2665,6 +3649,106 @@ export default function LabValidatePro() {
                 ]} />
             </CardContent>
           </Card>
+          {(() => {
+            const comps = [
+              { name: "Precision u(P)", u: mu.uPrec, share: mu.uc > 0 ? (mu.uPrec ** 2 / mu.uc ** 2) * 100 : 0 },
+              ...(mu.uBias !== null ? [{ name: "Bias u(bias)", u: mu.uBias, share: mu.uc > 0 ? (mu.uBias ** 2 / mu.uc ** 2) * 100 : 0 }] : []),
+            ].sort((a, b) => b.share - a.share);
+            const xbar = prec.gm, U = mu.U, uc = mu.uc, lo = xbar - U, hi = xbar + U;
+            const pad = (hi - lo) * 0.25 || Math.abs(xbar) * 0.05 || 1;
+            const BudgetTip = ({ active, payload }) => {
+              if (!active || !payload || !payload.length) return null;
+              const p = payload[0].payload;
+              return (
+                <div style={{ ...C.tooltip, padding: "6px 9px", minWidth: 160 }}>
+                  <div style={{ ...C.tooltipLabel }}>{p.name}</div>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 12, ...C.tooltipItem }}><span>Contribution</span><span style={{ fontVariantNumeric: "tabular-nums" }}>{fmt(p.share, 1)} %</span></div>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 12, ...C.tooltipItem }}><span>u</span><span style={{ fontVariantNumeric: "tabular-nums" }}>{fmtSig(p.u)} {unit}</span></div>
+                </div>
+              );
+            };
+            const ResTip = ({ active }) => {
+              if (!active) return null;
+              return (
+                <div style={{ ...C.tooltip, padding: "6px 9px", minWidth: 176 }}>
+                  <div style={{ ...C.tooltipLabel }}>Reported result</div>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 12, ...C.tooltipItem }}><span>x̄</span><span style={{ fontVariantNumeric: "tabular-nums" }}>{fmtSig(xbar)} {unit}</span></div>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 12, ...C.tooltipItem }}><span>± U (k=2)</span><span style={{ fontVariantNumeric: "tabular-nums" }}>± {fmtSig(U)} ({fmt(mu.UPct, 1)} %)</span></div>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 12, ...C.tooltipItem }}><span>95 % interval</span><span style={{ fontVariantNumeric: "tabular-nums" }}>{fmtSig(lo, 3)} … {fmtSig(hi, 3)}</span></div>
+                </div>
+              );
+            };
+            return (
+              <div className="space-y-2">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <Card>
+                  <CardHeader className="pb-1"><CardTitle className="text-xs text-muted-foreground uppercase tracking-wider">Uncertainty budget — variance contributions</CardTitle></CardHeader>
+                  <CardContent className="h-[200px]">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={comps} layout="vertical" margin={{ top: 8, right: 28, bottom: 4, left: 10 }}>
+                        <CartesianGrid stroke={C.grid} strokeDasharray="3 3" />
+                        <XAxis type="number" domain={[0, 100]} tick={{ fontSize: 10, fill: C.axis }} stroke={C.grid} tickFormatter={(v) => v + "%"} />
+                        <YAxis type="category" dataKey="name" width={96} tick={{ fontSize: 10, fill: C.axis }} stroke={C.grid} />
+                        <RTooltip cursor={{ fill: C.grid, fillOpacity: 0.15 }} content={<BudgetTip />} />
+                        <Bar dataKey="share" radius={[0, 4, 4, 0]} barSize={22} isAnimationActive={false}>
+                          {comps.map((r, i) => <Cell key={i} fill={i === 0 ? C.primary : C.violet} />)}
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardHeader className="pb-1"><CardTitle className="text-xs text-muted-foreground uppercase tracking-wider">Reported result x̄ ± U (k = 2)</CardTitle></CardHeader>
+                  <CardContent className="h-[200px]">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <ScatterChart margin={{ top: 8, right: 24, bottom: 4, left: 10 }}>
+                        <CartesianGrid stroke={C.grid} strokeDasharray="3 3" />
+                        <XAxis type="number" dataKey="x" domain={[lo - pad, hi + pad]} tick={{ fontSize: 10, fill: C.axis }} stroke={C.grid} tickFormatter={(v) => fmtSig(v, 3)} />
+                        <YAxis type="number" dataKey="y" domain={[0, 2]} ticks={[1]} width={96} tickFormatter={() => "Result"} tick={{ fontSize: 10, fill: C.axis }} stroke={C.grid} />
+                        <RTooltip cursor={{ strokeDasharray: "3 3" }} content={<ResTip />} />
+                        <ReferenceArea x1={xbar - uc} x2={xbar + uc} y1={0} y2={2} fill={C.primary} fillOpacity={0.12} />
+                        <ReferenceLine x={xbar} stroke={C.ok} strokeDasharray="4 4" />
+                        <Scatter data={[{ x: xbar, y: 1, err: U }]} fill={C.primary} isAnimationActive={false}>
+                          <ErrorBar dataKey="err" width={7} strokeWidth={1.8} stroke={C.primary} direction="x" />
+                        </Scatter>
+                      </ScatterChart>
+                    </ResponsiveContainer>
+                  </CardContent>
+                </Card>
+              </div>
+              <p className="text-[11px] leading-relaxed text-muted-foreground">
+                The <b>budget</b> ranks each component by its share of the combined variance u<sub>c</sub>² (largest first) — showing at a glance whether <b>precision</b> or <b>bias</b> dominates and where to focus improvement.
+                {" "}The <b>result</b> plot shows the value x̄ = {fmtSig(xbar)} {unit} with its expanded-uncertainty interval ± U (k = 2 ≈ 95 %); the shaded inner band is the standard uncertainty ± u<sub>c</sub> (k = 1).
+              </p>
+              </div>
+            );
+          })()}
+          {(() => {
+            const crm = trueness?.mode === "crm";
+            const uRef = num(study.trueness.crmU) ?? 0;
+            const sm = crm ? trueness.sd / Math.sqrt(trueness.n) : null;
+            const steps = [
+              { label: "1. Precision contribution — the intermediate precision sI from the ANOVA (Precision module) is taken directly as u(P)",
+                formula: `u(P) = sI = ${fmtSig(mu.uPrec)} ${unit}` },
+              mu.uBias === null
+                ? { label: "2. Bias contribution — no trueness study assessed, so bias is not included",
+                    formula: "u(bias) = —   (assess a CRM or spike recovery to include it)" }
+                : crm
+                  ? { label: "2. Bias contribution (CRM) — combine the standard error of the CRM mean, the CRM's own standard uncertainty, and the observed bias",
+                      formula: `u(bias) = √( (s/√n)² + (U_CRM/2)² + bias² )\n= √( (${fmtSig(trueness.sd)}/√${trueness.n})² + (${fmtSig(uRef)}/2)² + ${fmtSig(trueness.bias, 3)}² )\n= √( ${fmtSig(sm, 3)}² + ${fmtSig(uRef / 2, 3)}² + ${fmtSig(trueness.bias, 3)}² ) = ${fmtSig(mu.uBias)} ${unit}`,
+                      note: "U_CRM is the certificate's expanded uncertainty; dividing by 2 converts it back to a standard uncertainty (k = 2)." }
+                  : { label: "2. Bias contribution (spike recovery) — the absolute bias is used as u(bias)",
+                      formula: `u(bias) = |bias| = ${fmtSig(mu.uBias)} ${unit}` },
+              { label: "3. Combine the independent components in quadrature",
+                formula: mu.uBias === null
+                  ? `uc = u(P) = ${fmtSig(mu.uc)} ${unit}`
+                  : `uc = √( u(P)² + u(bias)² ) = √( ${fmtSig(mu.uPrec)}² + ${fmtSig(mu.uBias)}² ) = ${fmtSig(mu.uc)} ${unit}` },
+              { label: "4. Expand to ~95 % confidence with coverage factor k = 2, then express relative to the result mean",
+                formula: `U = 2 × uc = 2 × ${fmtSig(mu.uc)} = ${fmtSig(mu.U)} ${unit}\nU rel = U / x̄ × 100 = ${fmtSig(mu.U)} / ${fmtSig(prec.gm)} × 100 = ${fmt(mu.UPct, 2)} %`,
+                note: "x̄ is the grand mean from the Precision ANOVA." },
+            ];
+            return <WorkSteps steps={steps} title="Show how U is calculated" />;
+          })()}
         </>
       )}
     </div>
@@ -2733,13 +3817,19 @@ export default function LabValidatePro() {
                 ? "All evaluated performance characteristics meet the stated acceptance criteria; the method is deemed fit for its intended purpose within the stated scope."
                 : "One or more performance characteristics are pending or outside the acceptance criteria; the method is not yet demonstrated fit for purpose."}
             </div>
-            <div className="grid grid-cols-3 gap-6 pt-4">
-              {[["Performed by", study.info.analyst], ["Reviewed by", study.info.reviewer], ["Approved by", ""]].map(([lab, name], i) => (
+            <div className="grid grid-cols-1 gap-8 pt-4 sm:grid-cols-3 sm:gap-6">
+              {[
+                ["Performed by", study.info.analyst],
+                ["Reviewed by", study.info.reviewer === "QA Manager" ? "" : study.info.reviewer],
+                ["Approved by", ""],
+              ].map(([lab, name], i) => (
                 <div key={i}>
-                  <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-8">{lab}</div>
-                  <div className="border-t border-muted-foreground/50 pt-1.5 text-[11px] text-muted-foreground">
-                    <div>Name: {name || "_______________"}</div>
-                    <div className="mt-1">Date: _______________</div>
+                  <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-4">{lab}</div>
+                  <div className="text-[11px] text-muted-foreground space-y-3">
+                    <div className="border-b border-muted-foreground/40 pb-1">Name:{name ? ` ${name}` : ""}</div>
+                    <div className="border-b border-muted-foreground/40 pb-1">Position:</div>
+                    <div className="border-b border-muted-foreground/40 pb-1">Signature:</div>
+                    <div className="border-b border-muted-foreground/40 pb-1">Date:</div>
                   </div>
                 </div>
               ))}
@@ -2792,6 +3882,7 @@ export default function LabValidatePro() {
 
   /* ══════════════════════════ LAYOUT ══════════════════════════ */
   return (
+    <ConfirmContext.Provider value={askDelete}>
     <TooltipProvider delayDuration={300}>
     <div className={`lvp-root ${dark ? "dark" : ""} min-h-screen`}>
       <style>{THEME_CSS}</style>
@@ -3184,6 +4275,33 @@ export default function LabValidatePro() {
         </div>
       )}
 
+      {/* Generic row-delete confirmation — guards every module's Trash button against an accidental click */}
+      {confirmDel && (
+        <div className="lvp-no-print fixed inset-0 z-[70] flex items-center justify-center p-4"
+          onClick={() => setConfirmDel(null)}>
+          <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" />
+          <div className="relative w-full max-w-sm rounded-xl border border-border bg-card p-5 shadow-2xl"
+            onClick={(ev) => ev.stopPropagation()}>
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-destructive/10">
+                <AlertTriangle className="h-5 w-5 text-destructive" />
+              </div>
+              <div className="min-w-0">
+                <h2 className="text-sm font-semibold">{confirmDel.title}</h2>
+                <p className="mt-1 text-[13px] text-muted-foreground">{confirmDel.message} This can’t be undone.</p>
+              </div>
+            </div>
+            <div className="mt-5 flex justify-end gap-2">
+              <Button variant="outline" size="sm" onClick={() => setConfirmDel(null)}>Cancel</Button>
+              <Button variant="destructive" size="sm"
+                onClick={() => { const fn = confirmDel.onConfirm; setConfirmDel(null); fn?.(); }}>
+                <Trash2 className="h-3.5 w-3.5 mr-1.5" />Delete
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Toast — transient confirmation for save / delete / rename */}
       {toast && (
         <div className="lvp-no-print fixed bottom-5 left-1/2 z-[60] -translate-x-1/2 px-2 w-full max-w-sm pointer-events-none">
@@ -3200,5 +4318,6 @@ export default function LabValidatePro() {
       )}
     </div>
     </TooltipProvider>
+    </ConfirmContext.Provider>
   );
 }
