@@ -1,6 +1,6 @@
 import { useMemo, useState, useEffect } from "react";
 import {
-  Document, Page, View, Text, Svg, Rect, Line, Circle, Polyline, G,
+  Document, Page, View, Text, Svg, Rect, Line, Circle, Polyline, Polygon, G,
   StyleSheet, PDFViewer, pdf,
 } from "@react-pdf/renderer";
 import {
@@ -23,6 +23,39 @@ const sd = (a) => {
   if (a.length < 2) return 0;
   const m = mean(a);
   return Math.sqrt(a.reduce((s, v) => s + (v - m) ** 2, 0) / (a.length - 1));
+};
+
+/* Log-gamma (Lanczos) + F-distribution density — mirrors the app so the PDF
+   draws the same F-test reference curve. */
+const lgamma = (z) => {
+  const c = [0.99999999999980993, 676.5203681218851, -1259.1392167224028,
+    771.32342877765313, -176.61502916214059, 12.507343278686905,
+    -0.13857109526572012, 9.9843695780195716e-6, 1.5056327351493116e-7];
+  if (z < 0.5) return Math.log(Math.PI / Math.sin(Math.PI * z)) - lgamma(1 - z);
+  z -= 1;
+  let x = c[0];
+  for (let i = 1; i < 9; i++) x += c[i] / (z + i);
+  const t = z + 7.5;
+  return 0.5 * Math.log(2 * Math.PI) + (z + 0.5) * Math.log(t) - t + Math.log(x);
+};
+const fPdf = (x, d1, d2) => {
+  if (x <= 0) return 0;
+  const lnB = lgamma(d1 / 2) + lgamma(d2 / 2) - lgamma((d1 + d2) / 2);
+  const lnNum = (d1 / 2) * Math.log(d1 / d2) + (d1 / 2 - 1) * Math.log(x)
+    - ((d1 + d2) / 2) * Math.log(1 + (d1 / d2) * x);
+  return Math.exp(lnNum - lnB);
+};
+/* Two-tailed 95 % Student-t critical value (interpolated) — matches the app;
+   used for the ruggedness repeatability critical difference. */
+const tCrit95 = (df) => {
+  const T = [[1, 12.706], [2, 4.303], [3, 3.182], [4, 2.776], [5, 2.571], [6, 2.447], [7, 2.365], [8, 2.306], [9, 2.262], [10, 2.228], [12, 2.179], [14, 2.145], [16, 2.120], [18, 2.101], [20, 2.086], [25, 2.060], [30, 2.042], [40, 2.021], [60, 2.000], [120, 1.980], [1e9, 1.960]];
+  if (df <= 1) return 12.706;
+  for (let i = 0; i < T.length - 1; i++) {
+    const [d1, t1] = T[i], [d2, t2] = T[i + 1];
+    if (df === d1) return t1;
+    if (df > d1 && df <= d2) return t1 + ((df - d1) / (d2 - d1)) * (t2 - t1);
+  }
+  return 1.96;
 };
 
 /* Print-friendly palette (always light; matches the app's brand teal). */
@@ -65,9 +98,10 @@ const s = StyleSheet.create({
 
   signRow: { flexDirection: "row", justifyContent: "space-between", marginTop: 26, gap: 18 },
   signCol: { flex: 1 },
-  signLabel: { fontSize: 7, color: K.muted, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 24 },
-  signLine: { borderTopWidth: 0.8, borderTopColor: K.faint, paddingTop: 4 },
+  signLabel: { fontSize: 7, color: K.muted, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 10 },
   signName: { fontSize: 8, color: K.muted },
+  signField: { fontSize: 8, color: K.muted, borderBottomWidth: 0.8, borderBottomColor: K.faint, marginTop: 12, paddingBottom: 3 },
+  signSignature: { fontSize: 8, color: K.muted, borderBottomWidth: 0.8, borderBottomColor: K.faint, marginTop: 14, paddingBottom: 3 },
 
   chartWrap: { marginTop: 8, marginBottom: 4 },
   chartTitle: { fontSize: 8, fontFamily: "Helvetica-Bold", color: K.muted, marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.3 },
@@ -132,19 +166,77 @@ function ChartBox({ title, children }) {
 
 function CalibrationChart({ lin, unit }) {
   const xs = lin.rows.map((r) => r.conc);
-  const ys = lin.rows.flatMap((r) => [r.yObs, r.yPred]);
-  const sx = scaler(Math.min(...xs), Math.max(...xs), PAD.l, CW - PAD.r);
+  const xMin = Math.min(...xs), xMax = Math.max(...xs);
+  // 95 % confidence band of the fitted line, on a fine grid.
+  const hasBand = Number.isFinite(lin.syx) && Number.isFinite(lin.sxx) && lin.sxx > 0 && lin.n > 2;
+  const t = hasBand ? tCrit95(lin.n - 2) : 0;
+  const seAt = (x) => lin.syx * Math.sqrt(1 / lin.n + (x - lin.mx) ** 2 / lin.sxx);
+  const G = 40, grid = [];
+  for (let i = 0; i <= G; i++) { const x = xMin + ((xMax - xMin) * i) / G; const fit = lin.slope * x + lin.intercept; const half = hasBand ? t * seAt(x) : 0; grid.push({ x, fit, lo: fit - half, hi: fit + half }); }
+  const ys = [...lin.rows.flatMap((r) => [r.yObs, r.yPred]), ...grid.flatMap((g) => [g.lo, g.hi])];
+  const sx = scaler(xMin, xMax, PAD.l, CW - PAD.r);
   const sy = scaler(Math.min(...ys), Math.max(...ys), CH - PAD.b, PAD.t);
-  const fitPts = [...lin.rows].sort((a, b) => a.conc - b.conc).map((r) => `${sx(r.conc)},${sy(r.yPred)}`).join(" ");
+  const fitPts = grid.map((g) => `${sx(g.x)},${sy(g.fit)}`).join(" ");
+  const bandPoly = grid.map((g) => `${sx(g.x)},${sy(g.hi)}`).join(" ") + " " + [...grid].reverse().map((g) => `${sx(g.x)},${sy(g.lo)}`).join(" ");
   return (
-    <ChartBox title={`Calibration curve (${unit || "conc"})`}>
+    <ChartBox title={`Calibration · 95% band (${unit || "conc"})`}>
       <Axes xLabel={`Conc (${unit})`} />
       {tick(PAD.l - 2, sy(Math.max(...ys)), sig(Math.max(...ys), 3), "end")}
       {tick(PAD.l - 2, sy(Math.min(...ys)), sig(Math.min(...ys), 3), "end")}
-      {tick(sx(Math.min(...xs)), CH - PAD.b + 8, fmt(Math.min(...xs), 2))}
-      {tick(sx(Math.max(...xs)), CH - PAD.b + 8, fmt(Math.max(...xs), 2))}
+      {tick(sx(xMin), CH - PAD.b + 8, fmt(xMin, 2))}
+      {tick(sx(xMax), CH - PAD.b + 8, fmt(xMax, 2))}
+      {hasBand ? <Polygon points={bandPoly} fill={K.primary} fillOpacity={0.13} stroke="none" /> : null}
       <Polyline points={fitPts} stroke={K.primary} strokeWidth={1.4} fill="none" />
       {lin.rows.map((r, i) => <Circle key={i} cx={sx(r.conc)} cy={sy(r.yObs)} r={2.4} fill={K.violet} />)}
+    </ChartBox>
+  );
+}
+
+/* Response-factor (sensitivity) plot: signal/conc vs conc — flat within the
+   band ⇒ constant sensitivity ⇒ linear; a trend means R² is masking curvature. */
+function RfChart({ lin, cr }) {
+  const rows = lin.rows.filter((r) => r.rf !== null);
+  if (!rows.length) return null;
+  const meanRF = rows.reduce((sm, r) => sm + r.rf, 0) / rows.length;
+  const tol = meanRF * (+cr.residPctMax) / 100;
+  const xs = rows.map((r) => r.conc), rfs = rows.map((r) => r.rf);
+  const yLo = Math.min(meanRF - tol, ...rfs), yHi = Math.max(meanRF + tol, ...rfs);
+  const pad = (yHi - yLo) * 0.15 || Math.abs(meanRF) * 0.05 || 1;
+  const sx = scaler(Math.min(...xs), Math.max(...xs), PAD.l, CW - PAD.r);
+  const sy = scaler(yLo - pad, yHi + pad, CH - PAD.b, PAD.t);
+  return (
+    <ChartBox title="Response factor (sensitivity)">
+      <Axes xLabel="Conc" />
+      <Rect x={PAD.l} y={sy(meanRF + tol)} width={CW - PAD.r - PAD.l} height={Math.max(0, sy(meanRF - tol) - sy(meanRF + tol))} fill={K.primary} fillOpacity={0.08} />
+      <Line x1={PAD.l} y1={sy(meanRF)} x2={CW - PAD.r} y2={sy(meanRF)} stroke={K.pass} strokeWidth={0.7} strokeDasharray="3 2" />
+      {tick(PAD.l - 2, sy(meanRF), sig(meanRF, 3), "end")}
+      {rows.map((r, i) => <Circle key={i} cx={sx(r.conc)} cy={sy(r.rf)} r={2.4} fill={Math.abs(r.rf - meanRF) <= tol ? K.primary : K.warn} />)}
+    </ChartBox>
+  );
+}
+
+/* Back-calculated accuracy: each level read back off the curve, % deviation
+   from nominal — the analyst-facing counterpart to the residual plot. */
+function AccuracyChart({ lin, cr }) {
+  const lim = +cr.residPctMax;
+  const rows = lin.rows.map((r) => {
+    const back = lin.slope !== 0 ? (r.yObs - lin.intercept) / lin.slope : null;
+    return { conc: r.conc, devPct: back !== null && r.conc !== 0 ? ((back - r.conc) / r.conc) * 100 : null };
+  }).filter((r) => r.devPct !== null);
+  if (!rows.length) return null;
+  const xs = rows.map((r) => r.conc);
+  const maxAbs = Math.max(lim * 1.3, ...rows.map((r) => Math.abs(r.devPct)));
+  const sx = scaler(Math.min(...xs), Math.max(...xs), PAD.l, CW - PAD.r);
+  const sy = scaler(-maxAbs, maxAbs, CH - PAD.b, PAD.t);
+  return (
+    <ChartBox title="Back-calculated accuracy (%)">
+      <Axes xLabel="Conc" />
+      <Line x1={PAD.l} y1={sy(0)} x2={CW - PAD.r} y2={sy(0)} stroke={K.faint} strokeWidth={0.6} />
+      <Line x1={PAD.l} y1={sy(lim)} x2={CW - PAD.r} y2={sy(lim)} stroke={K.warn} strokeWidth={0.7} strokeDasharray="3 2" />
+      <Line x1={PAD.l} y1={sy(-lim)} x2={CW - PAD.r} y2={sy(-lim)} stroke={K.warn} strokeWidth={0.7} strokeDasharray="3 2" />
+      {tick(PAD.l - 2, sy(lim), `+${fmt(lim, 1)}`, "end")}
+      {tick(PAD.l - 2, sy(-lim), `-${fmt(lim, 1)}`, "end")}
+      {rows.map((r, i) => <Circle key={i} cx={sx(r.conc)} cy={sy(r.devPct)} r={2.4} fill={Math.abs(r.devPct) > lim ? K.fail : K.primary} />)}
     </ChartBox>
   );
 }
@@ -207,9 +299,11 @@ function BarChartSvg({ title, bars, refValue, band, unit, valueFmt = (v) => fmt(
 
 function HBarChart({ title, bars, limit }) {
   // horizontal bars centred on 0: [{ label, value, color }]
+  // Wide left gutter so factor names (e.g. "Pyrolysis temperature (°C)") aren't clipped.
+  const LGUT = 96;
   const vals = bars.map((b) => Math.abs(b.value));
   const maxAbs = Math.max(limit * 1.3, ...vals) || 1;
-  const sx = scaler(-maxAbs, maxAbs, PAD.l, CW - PAD.r);
+  const sx = scaler(-maxAbs, maxAbs, LGUT, CW - PAD.r);
   const n = bars.length;
   const slot = (CH - PAD.t - PAD.b) / n;
   const bh = Math.min(16, slot * 0.55);
@@ -226,10 +320,415 @@ function HBarChart({ title, bars, limit }) {
         return (
           <G key={i}>
             <Rect x={Math.min(x0, xe)} y={cy - bh / 2} width={Math.abs(xe - x0)} height={bh} fill={b.color || K.primary} />
-            <Text x={PAD.l - 2} y={cy + 2} style={{ fontSize: 5.8 }} fill={K.muted} textAnchor="end">{(b.label || "").slice(0, 14)}</Text>
+            <Text x={2} y={cy + 2} style={{ fontSize: 5.8 }} fill={K.muted} textAnchor="start">{(b.label || "").slice(0, 26)}</Text>
           </G>
         );
       })}
+    </ChartBox>
+  );
+}
+
+/* F-test variance distribution: density curve for (df1, df2), the upper-tail
+   rejection region beyond F crit, and where the observed F statistic lands. */
+function FDistCurve({ comp }) {
+  const { df1, df2, F, fCrit, significant } = comp.f;
+  if (![df1, df2, fCrit].every(Number.isFinite) || !(fCrit > 0)) return null;
+  const capped = !Number.isFinite(F) || F > fCrit * 3;
+  const Fx = capped ? fCrit * 3 : F;
+  const xMax = Math.max(Fx, fCrit, 3) * 1.4;
+  const N = 120;
+  const x0 = xMax / N;
+  const raw = [];
+  for (let i = 0; i <= N; i++) { const x = x0 + ((xMax - x0) * i) / N; raw.push({ x, y: fPdf(x, df1, df2) }); }
+  const norm = Math.max(...raw.map((r) => r.y).filter(Number.isFinite)) || 1;
+  const sx = scaler(0, xMax, PAD.l, CW - PAD.r);
+  const sy = scaler(0, 1.12, CH - PAD.b, PAD.t);
+  const ny = (y) => Math.min(y / norm, 1.12);
+  const pts = raw.map((r) => `${sx(r.x)},${sy(ny(r.y))}`).join(" ");
+  const tail = raw.filter((r) => r.x >= fCrit);
+  const poly = tail.length
+    ? `${sx(fCrit)},${sy(0)} ` + tail.map((r) => `${sx(r.x)},${sy(ny(r.y))}`).join(" ") + ` ${sx(tail[tail.length - 1].x)},${sy(0)}`
+    : "";
+  const fCol = significant ? K.fail : K.pass;
+  return (
+    <ChartBox title={`F-test distribution (df ${df1}, ${df2})`}>
+      <Axes xLabel="F value" />
+      {poly ? <Polygon points={poly} fill={K.fail} fillOpacity={0.13} stroke="none" /> : null}
+      <Polyline points={pts} stroke={K.primary} strokeWidth={1.4} fill="none" />
+      <Line x1={sx(fCrit)} y1={PAD.t} x2={sx(fCrit)} y2={CH - PAD.b} stroke={K.warn} strokeWidth={0.8} strokeDasharray="3 2" />
+      <Line x1={sx(Fx)} y1={PAD.t} x2={sx(Fx)} y2={CH - PAD.b} stroke={fCol} strokeWidth={0.9} strokeDasharray="3 2" />
+      {tick(sx(fCrit), PAD.t + 4, `Fc ${fmt(fCrit, 2)}`)}
+      {tick(sx(Fx), CH - PAD.b - 3, `${capped ? "F≫ " : "F "}${fmt(F, 2)}`)}
+    </ChartBox>
+  );
+}
+
+/* Strip plot: every replicate of A (teal) and B (violet) with mean ± SD marks. */
+function SpreadChart({ comp, labelA, labelB }) {
+  const a = comp.a, b = comp.b;
+  const all = [...a, ...b];
+  const lo = Math.min(...all), hi = Math.max(...all), pad = (hi - lo) * 0.08 || 1;
+  const sx = scaler(lo - pad, hi + pad, PAD.l + 42, CW - PAD.r);
+  const yA = PAD.t + 34, yB = CH - PAD.b - 30;
+  const jit = (i, n) => (n <= 1 ? 0 : ((i / (n - 1)) - 0.5) * 12);
+  const m1 = mean(a), m2 = mean(b), s1 = sd(a), s2 = sd(b);
+  return (
+    <ChartBox title="Data spread (each replicate)">
+      <Text x={2} y={yA + 2} style={{ fontSize: 6 }} fill={K.muted}>{(labelA || "A").slice(0, 12)}</Text>
+      <Text x={2} y={yB + 2} style={{ fontSize: 6 }} fill={K.muted}>{(labelB || "B").slice(0, 12)}</Text>
+      {a.map((v, i) => <Circle key={"a" + i} cx={sx(v)} cy={yA + jit(i, a.length)} r={1.9} fill={K.primary} />)}
+      {b.map((v, i) => <Circle key={"b" + i} cx={sx(v)} cy={yB + jit(i, b.length)} r={1.9} fill={K.violet} />)}
+      <Line x1={sx(m1 - s1)} y1={yA} x2={sx(m1 + s1)} y2={yA} stroke={K.warn} strokeWidth={0.8} />
+      <Rect x={sx(m1) - 2.2} y={yA - 2.2} width={4.4} height={4.4} fill={K.warn} />
+      <Line x1={sx(m2 - s2)} y1={yB} x2={sx(m2 + s2)} y2={yB} stroke={K.warn} strokeWidth={0.8} />
+      <Rect x={sx(m2) - 2.2} y={yB - 2.2} width={4.4} height={4.4} fill={K.warn} />
+      {tick(sx(lo), CH - PAD.b + 8, sig(lo, 3))}
+      {tick(sx(hi), CH - PAD.b + 8, sig(hi, 3))}
+    </ChartBox>
+  );
+}
+
+/* Difference in means with its 95 % CI; crossing the dashed zero line ⇒ n.s. */
+function DiffChart({ comp }) {
+  const diff = comp.tt.diff, ci = comp.tt.tCrit * comp.tt.se;
+  const lo = Math.min(0, diff - ci), hi = Math.max(0, diff + ci);
+  const pad = (hi - lo) * 0.2 || Math.abs(diff) || 1;
+  const sx = scaler(lo - pad, hi + pad, PAD.l, CW - PAD.r);
+  const cy = (PAD.t + CH - PAD.b) / 2;
+  const col = comp.tt.significant ? K.warn : K.pass;
+  return (
+    <ChartBox title="Difference in means ± 95% CI">
+      <Axes />
+      <Line x1={sx(0)} y1={PAD.t} x2={sx(0)} y2={CH - PAD.b} stroke={K.pass} strokeWidth={0.8} strokeDasharray="3 2" />
+      <Line x1={sx(diff - ci)} y1={cy} x2={sx(diff + ci)} y2={cy} stroke={col} strokeWidth={1} />
+      <Line x1={sx(diff - ci)} y1={cy - 4} x2={sx(diff - ci)} y2={cy + 4} stroke={col} strokeWidth={1} />
+      <Line x1={sx(diff + ci)} y1={cy - 4} x2={sx(diff + ci)} y2={cy + 4} stroke={col} strokeWidth={1} />
+      <Circle cx={sx(diff)} cy={cy} r={2.6} fill={col} />
+      {tick(sx(0), PAD.t + 4, "0")}
+      {tick(sx(diff), cy - 8, sig(diff, 3))}
+      {tick(sx(lo - pad), CH - PAD.b + 8, sig(lo - pad, 2))}
+      {tick(sx(hi + pad), CH - PAD.b + 8, sig(hi + pad, 2))}
+    </ChartBox>
+  );
+}
+
+/* One-sample: replicates vs the reference value, with the mean's 95 % CI. */
+function OneSampleChart({ comp, label }) {
+  const a = comp.a;
+  const ci = comp.tCrit * comp.se;
+  const xs = [...a, comp.ref, comp.mean - ci, comp.mean + ci];
+  const lo = Math.min(...xs), hi = Math.max(...xs), pad = (hi - lo) * 0.15 || 1;
+  const sx = scaler(lo - pad, hi + pad, PAD.l + 20, CW - PAD.r);
+  const cy = (PAD.t + CH - PAD.b) / 2;
+  const col = comp.significant ? K.warn : K.pass;
+  return (
+    <ChartBox title="Data vs reference value">
+      <Line x1={PAD.l + 20} y1={CH - PAD.b} x2={CW - PAD.r} y2={CH - PAD.b} stroke={K.line} strokeWidth={1} />
+      <Text x={2} y={cy + 2} style={{ fontSize: 6 }} fill={K.muted}>{(label || "Data").slice(0, 10)}</Text>
+      <Line x1={sx(comp.ref)} y1={PAD.t} x2={sx(comp.ref)} y2={CH - PAD.b} stroke={K.violet} strokeWidth={0.8} strokeDasharray="3 2" />
+      {tick(sx(comp.ref), PAD.t + 4, `ref ${sig(comp.ref, 3)}`)}
+      {a.map((v, i) => <Circle key={i} cx={sx(v)} cy={cy + ((i % 3) - 1) * 3} r={1.9} fill={K.primary} />)}
+      <Line x1={sx(comp.mean - ci)} y1={cy} x2={sx(comp.mean + ci)} y2={cy} stroke={col} strokeWidth={1} />
+      <Line x1={sx(comp.mean - ci)} y1={cy - 4} x2={sx(comp.mean - ci)} y2={cy + 4} stroke={col} strokeWidth={1} />
+      <Line x1={sx(comp.mean + ci)} y1={cy - 4} x2={sx(comp.mean + ci)} y2={cy + 4} stroke={col} strokeWidth={1} />
+      <Rect x={sx(comp.mean) - 2.4} y={cy - 2.4} width={4.8} height={4.8} fill={col} />
+      {tick(sx(lo - pad), CH - PAD.b + 8, sig(lo - pad, 2))}
+      {tick(sx(hi + pad), CH - PAD.b + 8, sig(hi + pad, 2))}
+    </ChartBox>
+  );
+}
+
+/* Ruggedness sensitivity (tornado): the result span low → high per factor,
+   sorted by effect size, with the mean of all results marked. */
+function TornadoChart({ robust, cr }) {
+  const rob = +cr.robustPctMax;
+  const items = [...robust]
+    .map((r) => ({ name: r.name, lo: Math.min(+r.resLow, +r.resHigh), hi: Math.max(+r.resLow, +r.resHigh), effect: r.effect, ok: Math.abs(r.effectPct) <= rob }))
+    .sort((a, b) => Math.abs(b.effect) - Math.abs(a.effect));
+  const results = robust.flatMap((r) => [+r.resLow, +r.resHigh]).filter(Number.isFinite);
+  if (!results.length) return null;
+  const gm = results.reduce((a, b) => a + b, 0) / results.length;
+  const lo = Math.min(...results), hi = Math.max(...results), pad = (hi - lo) * 0.1 || 1;
+  const sx = scaler(lo - pad, hi + pad, 96, CW - PAD.r);
+  const n = items.length;
+  const slot = (CH - PAD.t - PAD.b) / n;
+  const bh = Math.min(14, slot * 0.5);
+  return (
+    <ChartBox title="Sensitivity — result span (low → high)">
+      <Line x1={sx(gm)} y1={PAD.t} x2={sx(gm)} y2={CH - PAD.b} stroke={K.primary} strokeWidth={0.7} strokeDasharray="3 2" />
+      {tick(sx(gm), PAD.t + 4, "mean")}
+      {items.map((b, i) => {
+        const cy = PAD.t + slot * i + slot / 2;
+        const x1 = sx(b.lo), x2 = sx(b.hi);
+        return (
+          <G key={i}>
+            <Rect x={Math.min(x1, x2)} y={cy - bh / 2} width={Math.max(1.5, Math.abs(x2 - x1))} height={bh} fill={b.ok ? K.primary : K.warn} />
+            <Text x={2} y={cy + 2} style={{ fontSize: 5.8 }} fill={K.muted} textAnchor="start">{(b.name || "").slice(0, 26)}</Text>
+          </G>
+        );
+      })}
+      {tick(sx(lo), CH - PAD.b + 8, sig(lo, 3))}
+      {tick(sx(hi), CH - PAD.b + 8, sig(hi, 3))}
+    </ChartBox>
+  );
+}
+
+/* Ruggedness significance: |effect| per factor vs the repeatability critical
+   difference (needs the Precision module). Bars past the line are significant. */
+function SigChart({ robust, prec }) {
+  if (!prec) return null;
+  const cd = prec.sr * tCrit95(prec.dfw) * Math.SQRT2 / Math.sqrt(prec.N / prec.p);
+  const items = [...robust]
+    .map((r) => ({ name: r.name, absEffect: Math.abs(r.effect), sig: r.srTest }))
+    .sort((a, b) => b.absEffect - a.absEffect);
+  const maxV = Math.max(cd, ...items.map((i) => i.absEffect)) || 1;
+  const sx = scaler(0, maxV * 1.12, 96, CW - PAD.r);
+  const n = items.length;
+  const slot = (CH - PAD.t - PAD.b) / n;
+  const bh = Math.min(14, slot * 0.5);
+  const x0 = sx(0);
+  return (
+    <ChartBox title="|Effect| vs repeatability noise">
+      <Line x1={x0} y1={PAD.t} x2={x0} y2={CH - PAD.b} stroke={K.line} strokeWidth={0.8} />
+      <Line x1={sx(cd)} y1={PAD.t} x2={sx(cd)} y2={CH - PAD.b} stroke={K.warn} strokeWidth={0.7} strokeDasharray="3 2" />
+      {tick(sx(cd), PAD.t + 4, `CD ${sig(cd, 2)}`)}
+      {items.map((b, i) => {
+        const cy = PAD.t + slot * i + slot / 2;
+        return (
+          <G key={i}>
+            <Rect x={x0} y={cy - bh / 2} width={Math.max(1, sx(b.absEffect) - x0)} height={bh} fill={b.sig ? K.warn : K.primary} />
+            <Text x={2} y={cy + 2} style={{ fontSize: 5.8 }} fill={K.muted} textAnchor="start">{(b.name || "").slice(0, 26)}</Text>
+          </G>
+        );
+      })}
+    </ChartBox>
+  );
+}
+
+/* LOD/LOQ distribution: blank / LOD / LOQ bells of equal width (s'0) with the
+   decision limit LC and its false-positive (α) / false-negative (β) tails.
+   Mirrors the app; applies to the s0 and calibration approaches. */
+function LodDistChart({ lod, unit }) {
+  if (!lod || lod.lod == null || lod.loq == null) return null;
+  const sigma = lod.s0p && lod.s0p > 0 ? lod.s0p : lod.lod > 0 ? lod.lod / 3 : 0;
+  if (!(sigma > 0) || !Number.isFinite(lod.loq)) return null;
+  const mu = Number.isFinite(lod.mean) ? lod.mean : 0;
+  const lodC = mu + lod.lod, loqC = mu + lod.loq, lc = mu + lod.lod / 2;
+  const xMin = mu - 4 * sigma, xMax = loqC + 4 * sigma;
+  const N = 90;
+  const g = (x, c) => Math.exp(-0.5 * ((x - c) / sigma) ** 2);
+  const sx = scaler(xMin, xMax, PAD.l, CW - PAD.r);
+  const sy = scaler(0, 1.14, CH - PAD.b, PAD.t);
+  const xAt = (i) => xMin + ((xMax - xMin) * i) / N;
+  const curve = (c) => { const p = []; for (let i = 0; i <= N; i++) p.push(`${sx(xAt(i))},${sy(g(xAt(i), c))}`); return p.join(" "); };
+  const aPts = []; for (let i = 0; i <= N; i++) if (xAt(i) >= lc) aPts.push(xAt(i));
+  const bPts = []; for (let i = 0; i <= N; i++) if (xAt(i) <= lc) bPts.push(xAt(i));
+  const aPoly = aPts.length ? `${sx(lc)},${sy(0)} ` + aPts.map((x) => `${sx(x)},${sy(g(x, mu))}`).join(" ") + ` ${sx(aPts[aPts.length - 1])},${sy(0)}` : "";
+  const bPoly = bPts.length ? `${sx(bPts[0])},${sy(0)} ` + bPts.map((x) => `${sx(x)},${sy(g(x, lodC))}`).join(" ") + ` ${sx(lc)},${sy(0)}` : "";
+  return (
+    <ChartBox title={`LOD / LOQ vs blank noise (${unit || ""})`}>
+      <Axes xLabel="Measured value" />
+      {aPoly ? <Polygon points={aPoly} fill={K.fail} fillOpacity={0.38} stroke="none" /> : null}
+      {bPoly ? <Polygon points={bPoly} fill={K.warn} fillOpacity={0.38} stroke="none" /> : null}
+      <Polyline points={curve(mu)} stroke={K.muted} strokeWidth={1.2} fill="none" />
+      <Polyline points={curve(lodC)} stroke={K.fail} strokeWidth={1.2} fill="none" />
+      <Polyline points={curve(loqC)} stroke={K.primary} strokeWidth={1.4} fill="none" />
+      <Line x1={sx(lc)} y1={PAD.t} x2={sx(lc)} y2={CH - PAD.b} stroke={K.warn} strokeWidth={0.7} strokeDasharray="3 2" />
+      {tick(sx(mu), CH - PAD.b + 8, "blank")}
+      {tick(sx(lc), PAD.t + 4, "LC")}
+      {tick(sx(lodC), PAD.t + 13, `LOD ${sig(lod.lod, 2)}`)}
+      {tick(sx(loqC), CH - PAD.b - 3, `LOQ ${sig(lod.loq, 2)}`)}
+    </ChartBox>
+  );
+}
+
+/* Trueness (CRM): measurement-spread bell around the mean, the true value, the
+   bias gap between them, and the CRM's own expanded-uncertainty band. */
+function TruenessCrmChart({ trueness, crmU, unit }) {
+  const mu = trueness.mean, sigma = trueness.sd, refVal = trueness.mean - trueness.bias;
+  if (![mu, sigma, refVal].every(Number.isFinite) || !(sigma > 0)) return null;
+  const xMin = Math.min(refVal, mu - 3.6 * sigma) - 0.5 * sigma;
+  const xMax = Math.max(refVal, mu + 3.6 * sigma) + 0.5 * sigma;
+  const N = 90;
+  const g = (x) => Math.exp(-0.5 * ((x - mu) / sigma) ** 2);
+  const sx = scaler(xMin, xMax, PAD.l, CW - PAD.r);
+  const sy = scaler(0, 1.14, CH - PAD.b, PAD.t);
+  const pts = []; for (let i = 0; i <= N; i++) { const x = xMin + ((xMax - xMin) * i) / N; pts.push(`${sx(x)},${sy(g(x))}`); }
+  const refU = +crmU, top = PAD.t, boxH = CH - PAD.b - PAD.t;
+  return (
+    <ChartBox title={`Measurement spread vs true value (${unit || ""})`}>
+      <Axes xLabel="Value" />
+      {Number.isFinite(refU) && refU > 0 ? <Rect x={sx(refVal - refU)} y={top} width={Math.max(1, sx(refVal + refU) - sx(refVal - refU))} height={boxH} fill={K.fail} fillOpacity={0.07} /> : null}
+      <Rect x={Math.min(sx(refVal), sx(mu))} y={top} width={Math.max(1, Math.abs(sx(mu) - sx(refVal)))} height={boxH} fill={K.pass} fillOpacity={0.09} />
+      <Polyline points={pts.join(" ")} stroke={K.primary} strokeWidth={1.5} fill="none" />
+      <Line x1={sx(refVal)} y1={top} x2={sx(refVal)} y2={CH - PAD.b} stroke={K.fail} strokeWidth={0.9} strokeDasharray="3 2" />
+      <Line x1={sx(mu)} y1={top} x2={sx(mu)} y2={CH - PAD.b} stroke={K.pass} strokeWidth={0.9} strokeDasharray="3 2" />
+      {tick(sx(refVal), PAD.t + 4, `true ${sig(refVal, 3)}`)}
+      {tick(sx(mu), CH - PAD.b - 3, `mean ${sig(mu, 3)}`)}
+    </ChartBox>
+  );
+}
+
+/* Trueness (spike): recovery with its 95 % CI against the 100 % target and the
+   acceptance window. CI crossing 100 % ⇒ no significant bias. */
+function TruenessSpikeChart({ trueness, recMin, recMax }) {
+  const R = trueness.recovery, ci = (trueness.tCrit || 2) * (trueness.sdRec || 0);
+  const lo = Math.min(recMin, R - ci, 100), hi = Math.max(recMax, R + ci, 100);
+  const pad = (hi - lo) * 0.12 || 5;
+  const sx = scaler(lo - pad, hi + pad, PAD.l, CW - PAD.r);
+  const cy = (PAD.t + CH - PAD.b) / 2;
+  const col = trueness.significant ? K.warn : K.pass;
+  return (
+    <ChartBox title="Spike recovery ± 95% CI">
+      <Axes xLabel="Recovery (%)" />
+      {Number.isFinite(recMin) && Number.isFinite(recMax) ? <Rect x={sx(recMin)} y={PAD.t} width={Math.max(1, sx(recMax) - sx(recMin))} height={CH - PAD.b - PAD.t} fill={K.passBg} /> : null}
+      <Line x1={sx(100)} y1={PAD.t} x2={sx(100)} y2={CH - PAD.b} stroke={K.pass} strokeWidth={0.8} strokeDasharray="3 2" />
+      {tick(sx(100), PAD.t + 4, "100%")}
+      <Line x1={sx(R - ci)} y1={cy} x2={sx(R + ci)} y2={cy} stroke={col} strokeWidth={1} />
+      <Line x1={sx(R - ci)} y1={cy - 4} x2={sx(R - ci)} y2={cy + 4} stroke={col} strokeWidth={1} />
+      <Line x1={sx(R + ci)} y1={cy - 4} x2={sx(R + ci)} y2={cy + 4} stroke={col} strokeWidth={1} />
+      <Circle cx={sx(R)} cy={cy} r={2.6} fill={col} />
+      {tick(sx(R), cy - 8, `${fmt(R, 1)}%`)}
+      {tick(sx(lo - pad), CH - PAD.b + 8, fmt(lo - pad, 0))}
+      {tick(sx(hi + pad), CH - PAD.b + 8, fmt(hi + pad, 0))}
+    </ChartBox>
+  );
+}
+
+/* Precision individual-value plot: every replicate grouped by run/day, with
+   group means (± SD), grand mean, and the ±sr / ±sI precision bands. */
+function PrecStripChart({ prec, label }) {
+  const groups = prec.groups;
+  if (!groups || !groups.length) return null;
+  const all = groups.flat();
+  const yLo = Math.min(...all, prec.gm - prec.sI), yHi = Math.max(...all, prec.gm + prec.sI);
+  const pad = (yHi - yLo) * 0.1 || 1;
+  const sy = scaler(yLo - pad, yHi + pad, CH - PAD.b, PAD.t);
+  const p = groups.length;
+  const slotW = (CW - PAD.r - PAD.l) / p;
+  const cx = (gi) => PAD.l + slotW * gi + slotW / 2;
+  const jit = (i, n) => (n <= 1 ? 0 : ((i / (n - 1)) - 0.5) * Math.min(slotW * 0.5, 26));
+  const bandRect = (half, fill, op) => <Rect x={PAD.l} y={sy(prec.gm + half)} width={CW - PAD.r - PAD.l} height={Math.max(0, sy(prec.gm - half) - sy(prec.gm + half))} fill={fill} fillOpacity={op} />;
+  return (
+    <ChartBox title={`Individual values by ${label.toLowerCase()}`}>
+      <Axes xLabel={label} />
+      {bandRect(prec.sI, K.primary, 0.06)}
+      {bandRect(prec.sr, K.pass, 0.10)}
+      <Line x1={PAD.l} y1={sy(prec.gm)} x2={CW - PAD.r} y2={sy(prec.gm)} stroke={K.primary} strokeWidth={0.7} strokeDasharray="3 2" />
+      {tick(PAD.l - 2, sy(prec.gm), sig(prec.gm, 3), "end")}
+      {groups.map((g, gi) => (
+        <G key={gi}>
+          {g.map((v, i) => <Circle key={i} cx={cx(gi) + jit(i, g.length)} cy={sy(v)} r={1.8} fill={K.violet} />)}
+          <Rect x={cx(gi) - 2.2} y={sy(mean(g)) - 2.2} width={4.4} height={4.4} fill={K.warn} />
+          <Text x={cx(gi)} y={CH - PAD.b + 8} style={{ fontSize: 6 }} fill={K.muted} textAnchor="middle">{`${label[0]}${gi + 1}`}</Text>
+        </G>
+      ))}
+    </ChartBox>
+  );
+}
+
+/* Variance components: total variance sI² split into within-group repeatability
+   (sr²) and between-group (s²b), as one stacked bar with % labels. */
+function VarCompChart({ prec }) {
+  const varW = prec.sr ** 2, varB = prec.sBetween ** 2, varT = varW + varB || 1;
+  const sy = scaler(0, varT * 1.12, CH - PAD.b, PAD.t);
+  const bw = 52, bx = PAD.l + (CW - PAD.r - PAD.l) / 2 - bw / 2 - 14;
+  const y0 = sy(0), yW = sy(varW), yTop = sy(varT);
+  return (
+    <ChartBox title="Variance components">
+      <Axes />
+      {tick(PAD.l - 2, y0, "0", "end")}
+      {tick(PAD.l - 2, yTop, sig(varT, 2), "end")}
+      <Rect x={bx} y={yW} width={bw} height={Math.max(0, y0 - yW)} fill={K.primary} />
+      <Rect x={bx} y={yTop} width={bw} height={Math.max(0, yW - yTop)} fill={K.violet} />
+      <Text x={bx + bw + 5} y={(y0 + yW) / 2 + 2} style={{ fontSize: 6 }} fill={K.primary}>{`sr²  ${fmt((varW / varT) * 100, 0)}%`}</Text>
+      <Text x={bx + bw + 5} y={(yW + yTop) / 2 + 2} style={{ fontSize: 6 }} fill={K.violet}>{`s²b  ${fmt((varB / varT) * 100, 0)}%`}</Text>
+    </ChartBox>
+  );
+}
+
+/* Precision vs acceptance limits: measured RSDr / RSDI (green/red) beside their
+   grey limit bars. */
+function RsdLimitChart({ prec, cr }) {
+  const rL = +cr.rsdRMax, iL = +cr.rsdIMax;
+  const items = [
+    { name: "RSDr", measured: prec.rsdR, limit: Number.isFinite(rL) ? rL : null },
+    { name: "RSDI", measured: prec.rsdI, limit: Number.isFinite(iL) ? iL : null },
+  ];
+  const hi = Math.max(...items.flatMap((d) => [d.measured, d.limit || 0])) * 1.15 || 1;
+  const sy = scaler(0, hi, CH - PAD.b, PAD.t);
+  const n = items.length, slot = (CW - PAD.r - PAD.l) / n, bw = Math.min(20, slot * 0.3), y0 = sy(0);
+  return (
+    <ChartBox title="Precision vs acceptance limits">
+      <Axes />
+      <Line x1={PAD.l} y1={y0} x2={CW - PAD.r} y2={y0} stroke={K.line} strokeWidth={0.8} />
+      {tick(PAD.l - 2, sy(hi), `${fmt(hi, 0)}%`, "end")}
+      {items.map((d, i) => {
+        const c = PAD.l + slot * i + slot / 2;
+        const ok = d.limit == null || d.measured <= d.limit;
+        return (
+          <G key={i}>
+            {d.limit != null ? <Rect x={c - bw - 2} y={sy(d.limit)} width={bw} height={Math.max(0, y0 - sy(d.limit))} fill={K.line} /> : null}
+            <Rect x={c + 2} y={sy(d.measured)} width={bw} height={Math.max(0, y0 - sy(d.measured))} fill={ok ? K.primary : K.fail} />
+            <Text x={c} y={CH - PAD.b + 8} style={{ fontSize: 6.5 }} fill={K.muted} textAnchor="middle">{d.name}</Text>
+            <Text x={c + 2 + bw / 2} y={sy(d.measured) - 2} style={{ fontSize: 6 }} fill={K.muted} textAnchor="middle">{fmt(d.measured, 1)}</Text>
+          </G>
+        );
+      })}
+    </ChartBox>
+  );
+}
+
+/* Uncertainty budget: each component's share of the combined variance uc²,
+   largest first — shows whether precision or bias dominates. */
+function UncertaintyBudgetChart({ mu }) {
+  const comps = [
+    { name: "Precision u(P)", u: mu.uPrec, share: mu.uc > 0 ? (mu.uPrec ** 2 / mu.uc ** 2) * 100 : 0 },
+    ...(mu.uBias !== null ? [{ name: "Bias u(bias)", u: mu.uBias, share: mu.uc > 0 ? (mu.uBias ** 2 / mu.uc ** 2) * 100 : 0 }] : []),
+  ].sort((a, b) => b.share - a.share);
+  const LGUT = 84;
+  const sx = scaler(0, 100, LGUT, CW - PAD.r);
+  const n = comps.length, slot = (CH - PAD.t - PAD.b) / n, bh = Math.min(18, slot * 0.5), x0 = sx(0);
+  return (
+    <ChartBox title="Uncertainty budget (% of variance)">
+      {[25, 50, 75, 100].map((g, i) => <Line key={i} x1={sx(g)} y1={PAD.t} x2={sx(g)} y2={CH - PAD.b} stroke={K.line} strokeWidth={0.4} strokeDasharray="2 3" />)}
+      <Line x1={x0} y1={PAD.t} x2={x0} y2={CH - PAD.b} stroke={K.line} strokeWidth={0.8} />
+      {[0, 50, 100].map((g, i) => <Text key={i} x={sx(g)} y={CH - PAD.b + 8} style={{ fontSize: 6 }} fill={K.faint} textAnchor="middle">{g}%</Text>)}
+      {comps.map((d, i) => {
+        const cy = PAD.t + slot * i + slot / 2;
+        return (
+          <G key={i}>
+            <Rect x={x0} y={cy - bh / 2} width={Math.max(1, sx(d.share) - x0)} height={bh} fill={i === 0 ? K.primary : K.violet} />
+            <Text x={2} y={cy + 2} style={{ fontSize: 6 }} fill={K.muted} textAnchor="start">{d.name.slice(0, 15)}</Text>
+            <Text x={sx(d.share) + 3} y={cy + 2} style={{ fontSize: 6 }} fill={K.muted} textAnchor="start">{fmt(d.share, 0)}%</Text>
+          </G>
+        );
+      })}
+    </ChartBox>
+  );
+}
+
+/* Reported result x̄ with its expanded-uncertainty interval (± U, k = 2) and the
+   inner ± uc (k = 1) standard-uncertainty band. */
+function ResultUChart({ mu, gm, unit }) {
+  if (!Number.isFinite(gm)) return null;
+  const U = mu.U, uc = mu.uc, lo = gm - U, hi = gm + U;
+  const pad = (hi - lo) * 0.25 || Math.abs(gm) * 0.05 || 1;
+  const sx = scaler(lo - pad, hi + pad, PAD.l, CW - PAD.r);
+  const cy = (PAD.t + CH - PAD.b) / 2;
+  return (
+    <ChartBox title={`Result x̄ ± U (k=2) (${unit || ""})`}>
+      <Axes />
+      <Rect x={sx(gm - uc)} y={PAD.t} width={Math.max(1, sx(gm + uc) - sx(gm - uc))} height={CH - PAD.b - PAD.t} fill={K.primary} fillOpacity={0.12} />
+      <Line x1={sx(gm)} y1={PAD.t} x2={sx(gm)} y2={CH - PAD.b} stroke={K.pass} strokeWidth={0.8} strokeDasharray="3 2" />
+      <Line x1={sx(lo)} y1={cy} x2={sx(hi)} y2={cy} stroke={K.primary} strokeWidth={1.2} />
+      <Line x1={sx(lo)} y1={cy - 5} x2={sx(lo)} y2={cy + 5} stroke={K.primary} strokeWidth={1.2} />
+      <Line x1={sx(hi)} y1={cy - 5} x2={sx(hi)} y2={cy + 5} stroke={K.primary} strokeWidth={1.2} />
+      <Circle cx={sx(gm)} cy={cy} r={2.8} fill={K.primary} />
+      <Text x={sx(gm)} y={cy - 9} style={{ fontSize: 6.5 }} fill={K.ink} textAnchor="middle">{sig(gm, 4)}</Text>
+      <Text x={(sx(lo) + sx(hi)) / 2} y={cy + 14} style={{ fontSize: 6 }} fill={K.muted} textAnchor="middle">{`±U ${sig(U, 2)} (${fmt(mu.UPct, 0)}%)`}</Text>
+      {tick(sx(lo), CH - PAD.b + 8, sig(lo, 3))}
+      {tick(sx(hi), CH - PAD.b + 8, sig(hi, 3))}
     </ChartBox>
   );
 }
@@ -287,10 +786,16 @@ function DetailSection({ id, view, data }) {
       />
     );
     charts = (
-      <View style={s.chartsRow}>
-        <CalibrationChart lin={lin} unit={unit} />
-        <ResidualChart lin={lin} cr={cr} />
-      </View>
+      <>
+        <View style={s.chartsRow}>
+          <CalibrationChart lin={lin} unit={unit} />
+          <ResidualChart lin={lin} cr={cr} />
+        </View>
+        <View style={s.chartsRow}>
+          <RfChart lin={lin} cr={cr} />
+          <AccuracyChart lin={lin} cr={cr} />
+        </View>
+      </>
     );
   }
 
@@ -320,6 +825,7 @@ function DetailSection({ id, view, data }) {
         rows={rows}
       />
     );
+    charts = <LodDistChart lod={lod} unit={unit} />;
   }
 
   if (id === "trueness" && trueness) {
@@ -339,6 +845,9 @@ function DetailSection({ id, view, data }) {
     table = (
       <Table columns={[{ header: "Parameter", width: "45%" }, { header: "Value", width: "55%", mono: true }]} rows={rows} />
     );
+    charts = trueness.mode === "crm"
+      ? <TruenessCrmChart trueness={trueness} crmU={study.trueness.crmU} unit={unit} />
+      : <TruenessSpikeChart trueness={trueness} recMin={+cr.recMin} recMax={+cr.recMax} />;
   }
 
   if (id === "precision" && prec) {
@@ -357,7 +866,19 @@ function DetailSection({ id, view, data }) {
       />
     );
     const bars = prec.groups.map((g, i) => ({ label: `G${i + 1}`, value: mean(g), sd: sd(g), color: K.primary }));
-    charts = <BarChartSvg title="Group means ± SD" bars={bars} refValue={prec.gm} unit={unit} valueFmt={(v) => sig(v, 3)} />;
+    const plabel = study.precision.label;
+    charts = (
+      <>
+        <View style={s.chartsRow}>
+          <BarChartSvg title="Group means ± SD" bars={bars} refValue={prec.gm} unit={unit} valueFmt={(v) => sig(v, 3)} />
+          <PrecStripChart prec={prec} label={plabel} />
+        </View>
+        <View style={s.chartsRow}>
+          <VarCompChart prec={prec} />
+          <RsdLimitChart prec={prec} cr={cr} />
+        </View>
+      </>
+    );
   }
 
   if (id === "comparison" && comp) {
@@ -371,6 +892,17 @@ function DetailSection({ id, view, data }) {
         ];
     table = (
       <Table columns={[{ header: "Test", width: "34%" }, { header: "Statistic", width: "38%", mono: true }, { header: "Conclusion", width: "28%" }]} rows={rows} />
+    );
+    charts = comp.mode === "twoSample" ? (
+      <>
+        <FDistCurve comp={comp} />
+        <View style={s.chartsRow}>
+          <SpreadChart comp={comp} labelA={study.comparison.labelA} labelB={study.comparison.labelB} />
+          <DiffChart comp={comp} />
+        </View>
+      </>
+    ) : (
+      <OneSampleChart comp={comp} label={study.comparison.labelA} />
     );
   }
 
@@ -412,7 +944,15 @@ function DetailSection({ id, view, data }) {
       label: r.name, value: r.effectPct,
       color: Math.abs(r.effectPct) <= +cr.robustPctMax ? K.primary : K.warn,
     }));
-    charts = <HBarChart title="Effect magnitude (%)" bars={bars} limit={+cr.robustPctMax} />;
+    charts = (
+      <>
+        <View style={s.chartsRow}>
+          <HBarChart title="Effect magnitude (%)" bars={bars} limit={+cr.robustPctMax} />
+          <TornadoChart robust={robust} cr={cr} />
+        </View>
+        {prec ? <SigChart robust={robust} prec={prec} /> : null}
+      </>
+    );
   }
 
   if (id === "uncertainty" && mu) {
@@ -426,6 +966,12 @@ function DetailSection({ id, view, data }) {
           [{ v: "Expanded U (k=2)", color: K.primary }, { v: `${sig(mu.U)} (${fmt(mu.UPct, 1)} %)`, color: K.primary }, ""],
         ]}
       />
+    );
+    charts = (
+      <View style={s.chartsRow}>
+        <UncertaintyBudgetChart mu={mu} />
+        <ResultUChart mu={mu} gm={prec ? prec.gm : NaN} unit={unit} />
+      </View>
     );
   }
 
@@ -516,12 +1062,18 @@ export function ReportDocument({ data, config }) {
         {/* Signatures */}
         {config.signatures && (
           <View style={s.signRow} wrap={false}>
-            {[["Performed by", info.analyst], ["Reviewed by", info.reviewer], ["Approved by", ""]].map(([label, name], i) => (
+            {[
+              ["Performed by", info.analyst],
+              ["Reviewed by", info.reviewer === "QA Manager" ? "" : info.reviewer],
+              ["Approved by", ""],
+            ].map(([label, name], i) => (
               <View key={i} style={s.signCol}>
                 <Text style={s.signLabel}>{label}</Text>
-                <View style={s.signLine}>
-                  <Text style={s.signName}>Name: {name || "_______________"}</Text>
-                  <Text style={[s.signName, { marginTop: 3 }]}>Date: _______________</Text>
+                <View>
+                  <Text style={s.signField}>Name:{name ? ` ${name}` : ""}</Text>
+                  <Text style={s.signField}>Position:</Text>
+                  <Text style={s.signField}>Signature:</Text>
+                  <Text style={s.signField}>Date:</Text>
                 </View>
               </View>
             ))}
@@ -586,13 +1138,13 @@ function availability(d) {
 const SECTION_META = [
   { id: "selectivity", label: "Selectivity", chart: false },
   { id: "linearity", label: "Linearity & Range", chart: true },
-  { id: "lodloq", label: "LOD / LOQ", chart: false },
-  { id: "trueness", label: "Trueness / Bias", chart: false },
+  { id: "lodloq", label: "LOD / LOQ", chart: true },
+  { id: "trueness", label: "Trueness / Bias", chart: true },
   { id: "precision", label: "Precision", chart: true },
-  { id: "comparison", label: "F & t Tests", chart: false },
+  { id: "comparison", label: "F & t Tests", chart: true },
   { id: "recovery", label: "Recovery", chart: true },
   { id: "robustness", label: "Ruggedness", chart: true },
-  { id: "uncertainty", label: "Uncertainty", chart: false },
+  { id: "uncertainty", label: "Uncertainty", chart: true },
 ];
 
 /* ── The dialog ────────────────────────────────────────────── */

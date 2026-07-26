@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { UserCircle2, X, Loader2, LogOut, Trash2, ShieldCheck } from "lucide-react";
+import { UserCircle2, X, Loader2, LogOut, Trash2, ShieldCheck, Eye, EyeOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -18,14 +18,24 @@ export function AccountDialog({ open, onClose, user, onUpdated, onSignOut, onDel
   const [msg, setMsg] = useState("");
   const [error, setError] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [showCurrent, setShowCurrent] = useState(false);
+  const [showNew, setShowNew] = useState(false);
 
   useEffect(() => {
     if (open) {
       setName(user?.name || "");
       setCurrentPassword(""); setNewPassword("");
       setMsg(""); setError(""); setConfirmDelete(false);
+      setShowCurrent(false); setShowNew(false);
     }
   }, [open, user]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e) => { if (e.key === "Escape") onClose?.(); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
 
   if (!open) return null;
 
@@ -58,9 +68,9 @@ export function AccountDialog({ open, onClose, user, onUpdated, onSignOut, onDel
   };
 
   return (
-    <div className="lvp-no-print fixed inset-0 z-50 flex items-start justify-center p-4 sm:p-6 overflow-y-auto" onClick={onClose}>
+    <div className="lvp-no-print fixed inset-0 z-50 flex items-start justify-center p-4 sm:p-6 overflow-y-auto">
       <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" />
-      <div className="relative w-full max-w-md mt-[6vh] rounded-xl border border-border bg-card shadow-xl" onClick={(e) => e.stopPropagation()}>
+      <div className="relative w-full max-w-md mt-[6vh] rounded-xl border border-border bg-card shadow-xl">
         <div className="flex items-center justify-between border-b border-border px-4 py-3">
           <div className="flex items-center gap-2">
             <UserCircle2 className="h-4 w-4 text-primary" />
@@ -85,13 +95,27 @@ export function AccountDialog({ open, onClose, user, onUpdated, onSignOut, onDel
             <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Change password <span className="font-normal normal-case">(optional)</span></div>
             <div className="space-y-1.5">
               <Label htmlFor="acct-cur">Current password</Label>
-              <Input id="acct-cur" type="password" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)}
-                placeholder="Required to set a new one" autoComplete="current-password" />
+              <div className="relative">
+                <Input id="acct-cur" type={showCurrent ? "text" : "password"} className="pr-9" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)}
+                  placeholder="Required to set a new one" autoComplete="current-password" />
+                <button type="button" onClick={() => setShowCurrent((v) => !v)} tabIndex={-1}
+                  aria-label={showCurrent ? "Hide password" : "Show password"}
+                  className="absolute inset-y-0 right-0 flex items-center px-2.5 text-muted-foreground hover:text-foreground">
+                  {showCurrent ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="acct-new">New password</Label>
-              <Input id="acct-new" type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)}
-                placeholder="At least 8 characters" autoComplete="new-password" minLength={8} />
+              <div className="relative">
+                <Input id="acct-new" type={showNew ? "text" : "password"} className="pr-9" value={newPassword} onChange={(e) => setNewPassword(e.target.value)}
+                  placeholder="At least 8 characters" autoComplete="new-password" minLength={8} />
+                <button type="button" onClick={() => setShowNew((v) => !v)} tabIndex={-1}
+                  aria-label={showNew ? "Hide password" : "Show password"}
+                  className="absolute inset-y-0 right-0 flex items-center px-2.5 text-muted-foreground hover:text-foreground">
+                  {showNew ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
             </div>
 
             {msg && <div className="flex items-center gap-1.5 text-[12px] text-emerald-600"><ShieldCheck className="h-3.5 w-3.5" />{msg}</div>}
