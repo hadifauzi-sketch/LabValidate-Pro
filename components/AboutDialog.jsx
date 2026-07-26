@@ -24,7 +24,7 @@ export function AboutDialog({ open, onClose, onOpenTerms }) {
             </div>
             <div>
               <div className="font-semibold tracking-tight">LabValidate <span className="text-primary">Pro</span></div>
-              <div className="text-[11px] font-data text-muted-foreground">Version 1.0.0</div>
+              <div className="text-[11px] font-data text-muted-foreground">Version 1.1.0</div>
             </div>
           </div>
 
