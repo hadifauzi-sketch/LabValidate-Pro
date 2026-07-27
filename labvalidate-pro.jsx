@@ -1073,7 +1073,7 @@ const blankStudy = () => {
   const rows = (n, make) => Array.from({ length: n }, make);
   return {
     info: {
-      title: "", id: "", version: "1.0", analyst: "Arthor ChM. Ts. Hadi Fauzi.", reviewer: "",
+      title: "", id: "", version: "1.0", analyst: "ChM. Ts. Hadi Fauzi.", reviewer: "",
       date: today, lab: "", type: "validation", status: "Draft", standard: "",
       analyte: "", matrix: "", technique: "", unit: "mg/kg", range: "",
       requirement: "", intendedUse: "",
