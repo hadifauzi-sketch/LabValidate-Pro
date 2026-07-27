@@ -978,7 +978,7 @@ const CriteriaRow = ({ label, value, onChange, unit }) => (
    ════════════════════════════════════════════════════════════════ */
 const defaultStudy = () => ({
   info: {
-    title: "", id: "", version: "1.0", analyst: "Arthor ChM. Ts. Hadi Fauzi.", reviewer: "",
+    title: "", id: "", version: "1.0", analyst: "ChM. Ts. Hadi Fauzi.", reviewer: "",
     date: new Date().toISOString().slice(0, 10), lab: "",
     type: "validation", status: "Draft", standard: "",
     analyte: "", matrix: "", technique: "", unit: "mg/kg", range: "",
