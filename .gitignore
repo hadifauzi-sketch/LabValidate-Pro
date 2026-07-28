@@ -13,4 +13,5 @@ dist/
 
 # Local tooling and visual QA artifacts
 .claude/
+.serena/
 *-check.png

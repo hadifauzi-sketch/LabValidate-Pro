@@ -4,7 +4,7 @@
 
 Aligned with **EURACHEM** *“The Fitness for Purpose of Analytical Methods”, 3rd Ed. (2025)* and **ISO/IEC 17025:2017**.
 
-![Version](https://img.shields.io/badge/version-1.1.0-0f766e)
+![Version](https://img.shields.io/badge/version-1.2.0-0f766e)
 ![React](https://img.shields.io/badge/React-18-149eca)
 ![Vite](https://img.shields.io/badge/Vite-6-646cff)
 ![Tailwind CSS](https://img.shields.io/badge/Tailwind-3-38bdf8)
@@ -159,10 +159,10 @@ LabValidate Pro ships with a lightweight beta-access model:
 
 ## Author
 
-**ChM. Ts. Hadi Fauzi** — [LinkedIn](https://www.linkedin.com/in/chm-hadi-fauzi)
+**ChM. Ts. Hadi Fauzi, MRSC** — [LinkedIn](https://www.linkedin.com/in/chm-hadi-fauzi)
 
 ## License
 
-© ChM. Ts. Hadi Fauzi. All rights reserved.
+© ChM. Ts. Hadi Fauzi, MRSC. All rights reserved.
 
 > No open-source license is currently applied. If you intend to allow others to use, modify, or distribute the code, add a `LICENSE` file (e.g. MIT) and update this section.

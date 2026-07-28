@@ -1,10 +1,5 @@
 import { useState, useMemo, useRef, useEffect, lazy, Suspense, createContext, useContext } from "react";
 import {
-  LineChart, Line, Area, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip,
-  ResponsiveContainer, ScatterChart, Scatter, BarChart, Bar, ComposedChart,
-  ReferenceLine, ReferenceArea, ErrorBar, Cell,
-} from "recharts";
-import {
   FlaskConical, FileText, CheckCircle2, AlertTriangle, XCircle, Plus, Minus, Trash2,
   Download, Upload, Sun, Moon, Printer, Target, Layers, Shield, Activity,
   Beaker, Ruler, Crosshair, Repeat, GitCompareArrows, Sigma, ClipboardList,
@@ -16,17 +11,30 @@ import {
 import { auth, cloud } from "@/lib/apiClient";
 import { AuthDialog } from "@/components/AuthDialog";
 import { SettingsMenu } from "@/components/SettingsMenu";
-import { AccountDialog } from "@/components/AccountDialog";
-import { AboutDialog } from "@/components/AboutDialog";
 import { TermsDialog, TERMS_VERSION } from "@/components/TermsDialog";
-import { TutorialDialog } from "@/components/TutorialDialog";
 import { WorkspaceDashboard } from "@/components/WorkspaceDashboard";
-import { FeedbackDialog } from "@/components/FeedbackDialog";
-import { AdminDialog } from "@/components/AdminDialog";
-import { ReportDialog } from "@/components/ReportDialog";
-import { PendingGate } from "@/components/PendingGate";
+// Lazy — every dialog below renders only on demand, so each fetches its own
+// chunk the first time it is opened rather than riding along in the main bundle.
+// AuthDialog, TermsDialog and the SettingsMenu stay eager: they are the first
+// screen a signed-out visitor sees.
+const AccountDialog = lazy(() => import("@/components/AccountDialog").then((m) => ({ default: m.AccountDialog })));
+const AboutDialog = lazy(() => import("@/components/AboutDialog").then((m) => ({ default: m.AboutDialog })));
+const TutorialDialog = lazy(() => import("@/components/TutorialDialog").then((m) => ({ default: m.TutorialDialog })));
+const FeedbackDialog = lazy(() => import("@/components/FeedbackDialog").then((m) => ({ default: m.FeedbackDialog })));
+const ReportDialog = lazy(() => import("@/components/ReportDialog").then((m) => ({ default: m.ReportDialog })));
+const AdminDialog = lazy(() => import("@/components/AdminDialog").then((m) => ({ default: m.AdminDialog })));
+const PendingGate = lazy(() => import("@/components/PendingGate").then((m) => ({ default: m.PendingGate })));
 // Lazy — react-pdf is heavy, so it only loads when the Print/PDF dialog is opened.
 const PdfReportDialog = lazy(() => import("@/components/PdfReportDialog").then((m) => ({ default: m.PdfReportDialog })));
+// Lazy — recharts + d3 are the biggest slice of the main bundle, and nothing is
+// plotted until a module with a chart is opened. ChartFrame hands the recharts
+// primitives to the chart below it, so each chart stays where it is written.
+const ChartKit = lazy(() => import("@/components/ChartKit"));
+const ChartFrame = ({ children }) => (
+  <Suspense fallback={<div className="h-full w-full animate-pulse rounded-md bg-muted/30" />}>
+    <ChartKit>{children}</ChartKit>
+  </Suspense>
+);
 import { format as formatDate, parseISO, isValid as isValidDate } from "date-fns";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -651,6 +659,7 @@ const LodDistributionChart = ({ lod, kQ, unit, C }) => {
       </CardHeader>
       <CardContent className="space-y-3">
         <div className="h-[300px]">
+          <ChartFrame>{({ ResponsiveContainer, ComposedChart, LineChart, ScatterChart, BarChart, Line, Area, Bar, Scatter, Cell, XAxis, YAxis, CartesianGrid, RTooltip, ReferenceLine, ReferenceArea, ErrorBar }) => (
           <ResponsiveContainer width="100%" height="100%">
             <ComposedChart data={data} margin={{ top: 34, right: 18, bottom: 18, left: 4 }}>
               <CartesianGrid stroke={C.grid} strokeDasharray="3 3" vertical={false} />
@@ -678,6 +687,7 @@ const LodDistributionChart = ({ lod, kQ, unit, C }) => {
                 label={<CurveMarkerLabel name="LOQ" value={fmtSig(loqC, 3)} color={C.primary} />} />
             </ComposedChart>
           </ResponsiveContainer>
+          )}</ChartFrame>
         </div>
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-[11px] text-muted-foreground">
           <Dot color={C.axis} label="Blank (noise), width s′₀" />
@@ -760,6 +770,7 @@ const TruenessDistributionChart = ({ mean, sd, refVal, refU, bias, unit, C }) =>
       </CardHeader>
       <CardContent className="space-y-3">
         <div className="h-[300px]">
+          <ChartFrame>{({ ResponsiveContainer, ComposedChart, LineChart, ScatterChart, BarChart, Line, Area, Bar, Scatter, Cell, XAxis, YAxis, CartesianGrid, RTooltip, ReferenceLine, ReferenceArea, ErrorBar }) => (
           <ResponsiveContainer width="100%" height="100%">
             <ComposedChart data={data} margin={{ top: 34, right: 18, bottom: 18, left: 4 }}>
               <CartesianGrid stroke={C.grid} strokeDasharray="3 3" vertical={false} />
@@ -791,6 +802,7 @@ const TruenessDistributionChart = ({ mean, sd, refVal, refU, bias, unit, C }) =>
                 label={<CurveMarkerLabel name={coincide ? "μ ≈ true" : "μ (mean)"} value={fmtSig(mu, 3)} color={C.ok} />} />
             </ComposedChart>
           </ResponsiveContainer>
+          )}</ChartFrame>
         </div>
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-[11px] text-muted-foreground">
           <Dot color={C.primary} label="Measurements (spread = ±2σ)" />
@@ -849,6 +861,7 @@ const RecoveryDistributionChart = ({ recovery, sdRec, tCrit, significant, recMin
       </CardHeader>
       <CardContent className="space-y-3">
         <div className="h-[300px]">
+          <ChartFrame>{({ ResponsiveContainer, ComposedChart, LineChart, ScatterChart, BarChart, Line, Area, Bar, Scatter, Cell, XAxis, YAxis, CartesianGrid, RTooltip, ReferenceLine, ReferenceArea, ErrorBar }) => (
           <ResponsiveContainer width="100%" height="100%">
             <ComposedChart data={data} margin={{ top: 34, right: 18, bottom: 18, left: 4 }}>
               <CartesianGrid stroke={C.grid} strokeDasharray="3 3" vertical={false} />
@@ -879,6 +892,7 @@ const RecoveryDistributionChart = ({ recovery, sdRec, tCrit, significant, recMin
                 label={<CurveMarkerLabel name={coincide ? "R ≈ 100 %" : "Recovery"} value={`${fmt(R, 1)} %`} color={C.violet} />} />
             </ComposedChart>
           </ResponsiveContainer>
+          )}</ChartFrame>
         </div>
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-[11px] text-muted-foreground">
           <Dot color={C.primary} label="Recovery estimate (± t·u shaded)" />
@@ -929,6 +943,7 @@ const FDistributionChart = ({ df1, df2, F, fCrit, significant, C }) => {
       </CardHeader>
       <CardContent className="space-y-3">
         <div className="h-[260px]">
+          <ChartFrame>{({ ResponsiveContainer, ComposedChart, LineChart, ScatterChart, BarChart, Line, Area, Bar, Scatter, Cell, XAxis, YAxis, CartesianGrid, RTooltip, ReferenceLine, ReferenceArea, ErrorBar }) => (
           <ResponsiveContainer width="100%" height="100%">
             <ComposedChart data={data} margin={{ top: 30, right: 18, bottom: 18, left: 4 }}>
               <CartesianGrid stroke={C.grid} strokeDasharray="3 3" vertical={false} />
@@ -947,6 +962,7 @@ const FDistributionChart = ({ df1, df2, F, fCrit, significant, C }) => {
                 label={<CurveMarkerLabel name={capped ? "F (≫)" : "F"} value={fmt(F, 2)} color={significant ? C.bad : C.ok} />} />
             </ComposedChart>
           </ResponsiveContainer>
+          )}</ChartFrame>
         </div>
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-[11px] text-muted-foreground">
           <Dot color={C.primary} label={`F density (df ${df1}, ${df2})`} />
@@ -978,7 +994,7 @@ const CriteriaRow = ({ label, value, onChange, unit }) => (
    ════════════════════════════════════════════════════════════════ */
 const defaultStudy = () => ({
   info: {
-    title: "", id: "", version: "1.0", analyst: "ChM. Ts. Hadi Fauzi.", reviewer: "",
+    title: "", id: "", version: "1.0", analyst: "ChM. Ts. Hadi Fauzi, MRSC", reviewer: "",
     date: new Date().toISOString().slice(0, 10), lab: "",
     type: "validation", status: "Draft", standard: "",
     analyte: "", matrix: "", technique: "", unit: "mg/kg", range: "",
@@ -1073,7 +1089,7 @@ const blankStudy = () => {
   const rows = (n, make) => Array.from({ length: n }, make);
   return {
     info: {
-      title: "", id: "", version: "1.0", analyst: "ChM. Ts. Hadi Fauzi.", reviewer: "",
+      title: "", id: "", version: "1.0", analyst: "ChM. Ts. Hadi Fauzi, MRSC", reviewer: "",
       date: today, lab: "", type: "validation", status: "Draft", standard: "",
       analyte: "", matrix: "", technique: "", unit: "mg/kg", range: "",
       requirement: "", intendedUse: "",
@@ -1565,7 +1581,10 @@ export default function LabValidatePro() {
     }
   }, [study, dark, module]);
 
-  // Restore an existing session on load; if signed in, open the workspace.
+  // Restore an existing session on load. A plain refresh stays on the main
+  // study page (view defaults to "study") with the last study restored from
+  // localStorage — we only jump to the workspace on an explicit fresh sign-in
+  // (see handleAuthed), not on every reload.
   useEffect(() => {
     let alive = true;
     auth.me().then(({ user: u, requireLogin: rl }) => {
@@ -1574,7 +1593,6 @@ export default function LabValidatePro() {
       if (u) {
         setUser(u);
         presetStore.setUser(u);
-        setView("workspace");
         refreshPresets();
       }
     }).catch(() => { /* offline — treat as guest */ })
@@ -2248,6 +2266,7 @@ export default function LabValidatePro() {
               <Card>
                 <CardHeader className="pb-1"><CardTitle className="text-xs text-muted-foreground uppercase tracking-wider">Calibration curve · 95% confidence band</CardTitle></CardHeader>
                 <CardContent className="h-[260px]">
+                  <ChartFrame>{({ ResponsiveContainer, ComposedChart, LineChart, ScatterChart, BarChart, Line, Area, Bar, Scatter, Cell, XAxis, YAxis, CartesianGrid, RTooltip, ReferenceLine, ReferenceArea, ErrorBar }) => (
                   <ResponsiveContainer width="100%" height="100%">
                     <ComposedChart data={band} margin={{ top: 8, right: 12, bottom: 4, left: 0 }}>
                       <CartesianGrid stroke={C.grid} strokeDasharray="3 3" />
@@ -2261,11 +2280,13 @@ export default function LabValidatePro() {
                       <Scatter dataKey="yObs" fill={C.violet} isAnimationActive={false} />
                     </ComposedChart>
                   </ResponsiveContainer>
+                  )}</ChartFrame>
                 </CardContent>
               </Card>
               <Card>
                 <CardHeader className="pb-1"><CardTitle className="text-xs text-muted-foreground uppercase tracking-wider">Residual plot (%)</CardTitle></CardHeader>
                 <CardContent className="h-[260px]">
+                  <ChartFrame>{({ ResponsiveContainer, ComposedChart, LineChart, ScatterChart, BarChart, Line, Area, Bar, Scatter, Cell, XAxis, YAxis, CartesianGrid, RTooltip, ReferenceLine, ReferenceArea, ErrorBar }) => (
                   <ResponsiveContainer width="100%" height="100%">
                     <ScatterChart margin={{ top: 8, right: 12, bottom: 4, left: 0 }}>
                       <CartesianGrid stroke={C.grid} strokeDasharray="3 3" />
@@ -2280,6 +2301,7 @@ export default function LabValidatePro() {
                       </Scatter>
                     </ScatterChart>
                   </ResponsiveContainer>
+                  )}</ChartFrame>
                 </CardContent>
               </Card>
             </div>
@@ -2287,6 +2309,7 @@ export default function LabValidatePro() {
               <Card>
                 <CardHeader className="pb-1"><CardTitle className="text-xs text-muted-foreground uppercase tracking-wider">Response factor (sensitivity)</CardTitle></CardHeader>
                 <CardContent className="h-[240px]">
+                  <ChartFrame>{({ ResponsiveContainer, ComposedChart, LineChart, ScatterChart, BarChart, Line, Area, Bar, Scatter, Cell, XAxis, YAxis, CartesianGrid, RTooltip, ReferenceLine, ReferenceArea, ErrorBar }) => (
                   <ResponsiveContainer width="100%" height="100%">
                     <ComposedChart data={rfData} margin={{ top: 8, right: 12, bottom: 4, left: 0 }}>
                       <CartesianGrid stroke={C.grid} strokeDasharray="3 3" />
@@ -2301,11 +2324,13 @@ export default function LabValidatePro() {
                       </Scatter>
                     </ComposedChart>
                   </ResponsiveContainer>
+                  )}</ChartFrame>
                 </CardContent>
               </Card>
               <Card>
                 <CardHeader className="pb-1"><CardTitle className="text-xs text-muted-foreground uppercase tracking-wider">Back-calculated accuracy (%)</CardTitle></CardHeader>
                 <CardContent className="h-[240px]">
+                  <ChartFrame>{({ ResponsiveContainer, ComposedChart, LineChart, ScatterChart, BarChart, Line, Area, Bar, Scatter, Cell, XAxis, YAxis, CartesianGrid, RTooltip, ReferenceLine, ReferenceArea, ErrorBar }) => (
                   <ResponsiveContainer width="100%" height="100%">
                     <ScatterChart margin={{ top: 8, right: 12, bottom: 4, left: 0 }}>
                       <CartesianGrid stroke={C.grid} strokeDasharray="3 3" />
@@ -2321,6 +2346,7 @@ export default function LabValidatePro() {
                       </Scatter>
                     </ScatterChart>
                   </ResponsiveContainer>
+                  )}</ChartFrame>
                 </CardContent>
               </Card>
             </div>
@@ -2602,6 +2628,7 @@ export default function LabValidatePro() {
               <Card>
                 <CardHeader className="pb-1"><CardTitle className="text-xs text-muted-foreground uppercase tracking-wider">Group means ± SD</CardTitle></CardHeader>
                 <CardContent className="h-[230px]">
+                  <ChartFrame>{({ ResponsiveContainer, ComposedChart, LineChart, ScatterChart, BarChart, Line, Area, Bar, Scatter, Cell, XAxis, YAxis, CartesianGrid, RTooltip, ReferenceLine, ReferenceArea, ErrorBar }) => (
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={barData} margin={{ top: 8, right: 12, bottom: 4, left: 0 }}>
                       <CartesianGrid stroke={C.grid} strokeDasharray="3 3" />
@@ -2614,6 +2641,7 @@ export default function LabValidatePro() {
                       </Bar>
                     </BarChart>
                   </ResponsiveContainer>
+                  )}</ChartFrame>
                 </CardContent>
               </Card>
             </div>
@@ -2647,6 +2675,7 @@ export default function LabValidatePro() {
                   <Card>
                     <CardHeader className="pb-1"><CardTitle className="text-xs text-muted-foreground uppercase tracking-wider">Individual values by {label.toLowerCase()}</CardTitle></CardHeader>
                     <CardContent className="h-[240px]">
+                      <ChartFrame>{({ ResponsiveContainer, ComposedChart, LineChart, ScatterChart, BarChart, Line, Area, Bar, Scatter, Cell, XAxis, YAxis, CartesianGrid, RTooltip, ReferenceLine, ReferenceArea, ErrorBar }) => (
                       <ResponsiveContainer width="100%" height="100%">
                         <ScatterChart margin={{ top: 8, right: 14, bottom: 4, left: 0 }}>
                           <CartesianGrid stroke={C.grid} strokeDasharray="3 3" />
@@ -2662,12 +2691,14 @@ export default function LabValidatePro() {
                           </Scatter>
                         </ScatterChart>
                       </ResponsiveContainer>
+                      )}</ChartFrame>
                     </CardContent>
                   </Card>
                   <Card>
                     <CardHeader className="pb-1"><CardTitle className="text-xs text-muted-foreground uppercase tracking-wider">Variance components</CardTitle></CardHeader>
                     <CardContent>
                       <div className="h-[188px]">
+                        <ChartFrame>{({ ResponsiveContainer, ComposedChart, LineChart, ScatterChart, BarChart, Line, Area, Bar, Scatter, Cell, XAxis, YAxis, CartesianGrid, RTooltip, ReferenceLine, ReferenceArea, ErrorBar }) => (
                         <ResponsiveContainer width="100%" height="100%">
                           <BarChart data={[{ name: "Total σ² (sI²)", within: varW, between: varB }]} margin={{ top: 8, right: 12, bottom: 4, left: 0 }}>
                             <CartesianGrid stroke={C.grid} strokeDasharray="3 3" />
@@ -2679,6 +2710,7 @@ export default function LabValidatePro() {
                             <Bar dataKey="between" stackId="v" fill={C.violet} radius={[4, 4, 0, 0]} isAnimationActive={false} />
                           </BarChart>
                         </ResponsiveContainer>
+                        )}</ChartFrame>
                       </div>
                       <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted-foreground mt-1.5">
                         <span className="inline-flex items-center gap-1.5"><span className="inline-block h-2.5 w-2.5 rounded-sm" style={{ background: C.primary }} />Repeatability s<sub>r</sub>² · {fmt((varW / varT) * 100, 0)} %</span>
@@ -2690,6 +2722,7 @@ export default function LabValidatePro() {
                 <Card>
                   <CardHeader className="pb-1"><CardTitle className="text-xs text-muted-foreground uppercase tracking-wider">Precision vs acceptance limits</CardTitle></CardHeader>
                   <CardContent className="h-[220px]">
+                    <ChartFrame>{({ ResponsiveContainer, ComposedChart, LineChart, ScatterChart, BarChart, Line, Area, Bar, Scatter, Cell, XAxis, YAxis, CartesianGrid, RTooltip, ReferenceLine, ReferenceArea, ErrorBar }) => (
                     <ResponsiveContainer width="100%" height="100%">
                       <BarChart data={rsdBars} margin={{ top: 8, right: 12, bottom: 4, left: 0 }} barGap={6}>
                         <CartesianGrid stroke={C.grid} strokeDasharray="3 3" />
@@ -2702,6 +2735,7 @@ export default function LabValidatePro() {
                         </Bar>
                       </BarChart>
                     </ResponsiveContainer>
+                    )}</ChartFrame>
                   </CardContent>
                 </Card>
                 </div>
@@ -2930,6 +2964,7 @@ export default function LabValidatePro() {
               <Card>
                 <CardHeader className="pb-1"><CardTitle className="text-xs text-muted-foreground uppercase tracking-wider">Means ± SD</CardTitle></CardHeader>
                 <CardContent className="h-[230px]">
+                  <ChartFrame>{({ ResponsiveContainer, ComposedChart, LineChart, ScatterChart, BarChart, Line, Area, Bar, Scatter, Cell, XAxis, YAxis, CartesianGrid, RTooltip, ReferenceLine, ReferenceArea, ErrorBar }) => (
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={barData} margin={{ top: 8, right: 12, bottom: 4, left: 0 }}>
                       <CartesianGrid stroke={C.grid} strokeDasharray="3 3" />
@@ -2941,6 +2976,7 @@ export default function LabValidatePro() {
                       </Bar>
                     </BarChart>
                   </ResponsiveContainer>
+                  )}</ChartFrame>
                 </CardContent>
               </Card>
             </div>
@@ -2988,6 +3024,7 @@ export default function LabValidatePro() {
                   <Card>
                     <CardHeader className="pb-1"><CardTitle className="text-xs text-muted-foreground uppercase tracking-wider">Data spread (each replicate)</CardTitle></CardHeader>
                     <CardContent className="h-[230px]">
+                      <ChartFrame>{({ ResponsiveContainer, ComposedChart, LineChart, ScatterChart, BarChart, Line, Area, Bar, Scatter, Cell, XAxis, YAxis, CartesianGrid, RTooltip, ReferenceLine, ReferenceArea, ErrorBar }) => (
                       <ResponsiveContainer width="100%" height="100%">
                         <ScatterChart margin={{ top: 8, right: 18, bottom: 4, left: 10 }}>
                           <CartesianGrid stroke={C.grid} strokeDasharray="3 3" />
@@ -3001,11 +3038,13 @@ export default function LabValidatePro() {
                           </Scatter>
                         </ScatterChart>
                       </ResponsiveContainer>
+                      )}</ChartFrame>
                     </CardContent>
                   </Card>
                   <Card>
                     <CardHeader className="pb-1"><CardTitle className="text-xs text-muted-foreground uppercase tracking-wider">Difference in means ± 95 % CI</CardTitle></CardHeader>
                     <CardContent className="h-[230px]">
+                      <ChartFrame>{({ ResponsiveContainer, ComposedChart, LineChart, ScatterChart, BarChart, Line, Area, Bar, Scatter, Cell, XAxis, YAxis, CartesianGrid, RTooltip, ReferenceLine, ReferenceArea, ErrorBar }) => (
                       <ResponsiveContainer width="100%" height="100%">
                         <ScatterChart margin={{ top: 8, right: 22, bottom: 4, left: 10 }}>
                           <CartesianGrid stroke={C.grid} strokeDasharray="3 3" />
@@ -3018,6 +3057,7 @@ export default function LabValidatePro() {
                           </Scatter>
                         </ScatterChart>
                       </ResponsiveContainer>
+                      )}</ChartFrame>
                     </CardContent>
                   </Card>
                 </div>
@@ -3069,6 +3109,7 @@ export default function LabValidatePro() {
                 <Card>
                   <CardHeader className="pb-1"><CardTitle className="text-xs text-muted-foreground uppercase tracking-wider">Data vs reference value</CardTitle></CardHeader>
                   <CardContent className="h-[200px]">
+                    <ChartFrame>{({ ResponsiveContainer, ComposedChart, LineChart, ScatterChart, BarChart, Line, Area, Bar, Scatter, Cell, XAxis, YAxis, CartesianGrid, RTooltip, ReferenceLine, ReferenceArea, ErrorBar }) => (
                     <ResponsiveContainer width="100%" height="100%">
                       <ScatterChart margin={{ top: 12, right: 22, bottom: 4, left: 10 }}>
                         <CartesianGrid stroke={C.grid} strokeDasharray="3 3" />
@@ -3082,6 +3123,7 @@ export default function LabValidatePro() {
                         </Scatter>
                       </ScatterChart>
                     </ResponsiveContainer>
+                    )}</ChartFrame>
                   </CardContent>
                   <CardContent className="pt-0">
                     <p className="text-[11px] leading-relaxed text-muted-foreground">
@@ -3351,6 +3393,7 @@ export default function LabValidatePro() {
               <Card>
                 <CardHeader className="pb-1"><CardTitle className="text-xs text-muted-foreground uppercase tracking-wider">Recovery vs level (mean)</CardTitle></CardHeader>
                 <CardContent className="h-[230px]">
+                  <ChartFrame>{({ ResponsiveContainer, ComposedChart, LineChart, ScatterChart, BarChart, Line, Area, Bar, Scatter, Cell, XAxis, YAxis, CartesianGrid, RTooltip, ReferenceLine, ReferenceArea, ErrorBar }) => (
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={barData} margin={{ top: 8, right: 12, bottom: 4, left: 0 }}>
                       <CartesianGrid stroke={C.grid} strokeDasharray="3 3" />
@@ -3366,12 +3409,14 @@ export default function LabValidatePro() {
                       </Bar>
                     </BarChart>
                   </ResponsiveContainer>
+                  )}</ChartFrame>
                 </CardContent>
               </Card>
             </div>
             <Card>
               <CardHeader className="pb-1"><CardTitle className="text-xs text-muted-foreground uppercase tracking-wider">Recovery control chart</CardTitle></CardHeader>
               <CardContent className="h-[300px]">
+                <ChartFrame>{({ ResponsiveContainer, ComposedChart, LineChart, ScatterChart, BarChart, Line, Area, Bar, Scatter, Cell, XAxis, YAxis, CartesianGrid, RTooltip, ReferenceLine, ReferenceArea, ErrorBar }) => (
                 <ResponsiveContainer width="100%" height="100%">
                   <LineChart data={runData} margin={{ top: 22, right: 54, bottom: 18, left: 4 }}>
                     <CartesianGrid stroke={C.grid} strokeDasharray="3 3" vertical={false} />
@@ -3398,6 +3443,7 @@ export default function LabValidatePro() {
                     <Line dataKey="recovery" stroke={C.primary} strokeWidth={1.8} dot={<RunDot />} isAnimationActive={false} connectNulls />
                   </LineChart>
                 </ResponsiveContainer>
+                )}</ChartFrame>
               </CardContent>
             </Card>
             <p className="text-[11px] leading-relaxed text-muted-foreground">
@@ -3481,6 +3527,7 @@ export default function LabValidatePro() {
             <Card>
               <CardHeader className="pb-1"><CardTitle className="text-xs text-muted-foreground uppercase tracking-wider">Effect magnitude (%)</CardTitle></CardHeader>
               <CardContent className="h-[230px]">
+                <ChartFrame>{({ ResponsiveContainer, ComposedChart, LineChart, ScatterChart, BarChart, Line, Area, Bar, Scatter, Cell, XAxis, YAxis, CartesianGrid, RTooltip, ReferenceLine, ReferenceArea, ErrorBar }) => (
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={chartData} layout="vertical" margin={{ top: 8, right: 20, bottom: 4, left: 10 }}>
                     <CartesianGrid stroke={C.grid} strokeDasharray="3 3" />
@@ -3494,6 +3541,7 @@ export default function LabValidatePro() {
                     </Bar>
                   </BarChart>
                 </ResponsiveContainer>
+                )}</ChartFrame>
               </CardContent>
             </Card>
           </div>
@@ -3544,6 +3592,7 @@ export default function LabValidatePro() {
                 <Card>
                   <CardHeader className="pb-1"><CardTitle className="text-xs text-muted-foreground uppercase tracking-wider">Sensitivity — result span (low → high)</CardTitle></CardHeader>
                   <CardContent className="h-[230px]">
+                    <ChartFrame>{({ ResponsiveContainer, ComposedChart, LineChart, ScatterChart, BarChart, Line, Area, Bar, Scatter, Cell, XAxis, YAxis, CartesianGrid, RTooltip, ReferenceLine, ReferenceArea, ErrorBar }) => (
                     <ResponsiveContainer width="100%" height="100%">
                       <BarChart data={tornado} layout="vertical" margin={{ top: 12, right: 24, bottom: 4, left: 10 }}>
                         <CartesianGrid stroke={C.grid} strokeDasharray="3 3" />
@@ -3556,12 +3605,14 @@ export default function LabValidatePro() {
                         </Bar>
                       </BarChart>
                     </ResponsiveContainer>
+                    )}</ChartFrame>
                   </CardContent>
                 </Card>
                 {prec && (
                   <Card>
                     <CardHeader className="pb-1"><CardTitle className="text-xs text-muted-foreground uppercase tracking-wider">|Effect| vs repeatability noise</CardTitle></CardHeader>
                     <CardContent className="h-[230px]">
+                      <ChartFrame>{({ ResponsiveContainer, ComposedChart, LineChart, ScatterChart, BarChart, Line, Area, Bar, Scatter, Cell, XAxis, YAxis, CartesianGrid, RTooltip, ReferenceLine, ReferenceArea, ErrorBar }) => (
                       <ResponsiveContainer width="100%" height="100%">
                         <BarChart data={sig} layout="vertical" margin={{ top: 12, right: 24, bottom: 4, left: 10 }}>
                           <CartesianGrid stroke={C.grid} strokeDasharray="3 3" />
@@ -3574,6 +3625,7 @@ export default function LabValidatePro() {
                           </Bar>
                         </BarChart>
                       </ResponsiveContainer>
+                      )}</ChartFrame>
                     </CardContent>
                   </Card>
                 )}
@@ -3684,6 +3736,7 @@ export default function LabValidatePro() {
                 <Card>
                   <CardHeader className="pb-1"><CardTitle className="text-xs text-muted-foreground uppercase tracking-wider">Uncertainty budget — variance contributions</CardTitle></CardHeader>
                   <CardContent className="h-[200px]">
+                    <ChartFrame>{({ ResponsiveContainer, ComposedChart, LineChart, ScatterChart, BarChart, Line, Area, Bar, Scatter, Cell, XAxis, YAxis, CartesianGrid, RTooltip, ReferenceLine, ReferenceArea, ErrorBar }) => (
                     <ResponsiveContainer width="100%" height="100%">
                       <BarChart data={comps} layout="vertical" margin={{ top: 8, right: 28, bottom: 4, left: 10 }}>
                         <CartesianGrid stroke={C.grid} strokeDasharray="3 3" />
@@ -3695,11 +3748,13 @@ export default function LabValidatePro() {
                         </Bar>
                       </BarChart>
                     </ResponsiveContainer>
+                    )}</ChartFrame>
                   </CardContent>
                 </Card>
                 <Card>
                   <CardHeader className="pb-1"><CardTitle className="text-xs text-muted-foreground uppercase tracking-wider">Reported result x̄ ± U (k = 2)</CardTitle></CardHeader>
                   <CardContent className="h-[200px]">
+                    <ChartFrame>{({ ResponsiveContainer, ComposedChart, LineChart, ScatterChart, BarChart, Line, Area, Bar, Scatter, Cell, XAxis, YAxis, CartesianGrid, RTooltip, ReferenceLine, ReferenceArea, ErrorBar }) => (
                     <ResponsiveContainer width="100%" height="100%">
                       <ScatterChart margin={{ top: 8, right: 24, bottom: 4, left: 10 }}>
                         <CartesianGrid stroke={C.grid} strokeDasharray="3 3" />
@@ -3713,6 +3768,7 @@ export default function LabValidatePro() {
                         </Scatter>
                       </ScatterChart>
                     </ResponsiveContainer>
+                    )}</ChartFrame>
                   </CardContent>
                 </Card>
               </div>
@@ -4039,7 +4095,7 @@ export default function LabValidatePro() {
           rel="noopener noreferrer"
           className="font-medium text-primary underline-offset-4 transition-colors hover:underline hover:text-primary/80"
         >
-          ChM. Ts. Hadi Fauzi
+          ChM. Ts. Hadi Fauzi, MRSC
         </a>
       </footer>
 
@@ -4212,39 +4268,45 @@ export default function LabValidatePro() {
         </div>
       )}
 
-      {/* Accounts & settings dialogs */}
+      {/* Accounts & settings dialogs.
+          Everything lazy is mounted only while it is open — rendering a lazy
+          component with open={false} would still fetch its chunk up front. */}
       <AuthDialog open={authOpen} onClose={() => setAuthOpen(false)} onAuthed={handleAuthed} onViewTerms={() => setTermsOpen(true)} />
-      <AccountDialog
-        open={accountOpen} onClose={() => setAccountOpen(false)} user={user}
-        onUpdated={setUser} onSignOut={() => { setAccountOpen(false); handleSignOut(); }}
-        onDeleted={handleAccountDeleted}
-      />
-      <AboutDialog open={aboutOpen} onClose={() => setAboutOpen(false)} onOpenTerms={() => setTermsOpen(true)} />
       <TermsDialog open={termsOpen} onClose={() => setTermsOpen(false)} />
-      <TutorialDialog open={tutorialOpen} onClose={() => setTutorialOpen(false)} />
+      <Suspense fallback={null}>
+        {accountOpen && (
+          <AccountDialog
+            open onClose={() => setAccountOpen(false)} user={user}
+            onUpdated={setUser} onSignOut={() => { setAccountOpen(false); handleSignOut(); }}
+            onDeleted={handleAccountDeleted}
+          />
+        )}
+        {aboutOpen && <AboutDialog open onClose={() => setAboutOpen(false)} onOpenTerms={() => setTermsOpen(true)} />}
+        {tutorialOpen && <TutorialDialog open onClose={() => setTutorialOpen(false)} />}
 
-      {/* Feedback — voluntary dialog (dismissible) */}
-      <FeedbackDialog open={feedbackOpen && !accessLocked} onClose={() => setFeedbackOpen(false)} onSubmitted={handleFeedbackSubmitted} user={user} />
-      {/* Report a bug / improvement — separate from feedback */}
-      <ReportDialog open={reportOpen} onClose={() => setReportOpen(false)} />
+        {/* Feedback — voluntary dialog (dismissible) */}
+        {feedbackOpen && !accessLocked && (
+          <FeedbackDialog open onClose={() => setFeedbackOpen(false)} onSubmitted={handleFeedbackSubmitted} user={user} />
+        )}
+        {/* Report a bug / improvement — separate from feedback */}
+        {reportOpen && <ReportDialog open onClose={() => setReportOpen(false)} />}
 
-      {/* Build & export the validation report as a PDF (pick sections, tables/graphs) */}
-      {pdfOpen && (
-        <Suspense fallback={null}>
+        {/* Build & export the validation report as a PDF (pick sections, tables/graphs) */}
+        {pdfOpen && (
           <PdfReportDialog
             open={pdfOpen}
             onClose={() => setPdfOpen(false)}
             data={{ study, lin, lod, prec, trueness, comp, rec, robust, mu, status, cr, unit, isVerification, corePass, coreDone }}
           />
-        </Suspense>
-      )}
+        )}
 
-      {/* Access gate when the trial has lapsed: ask for feedback, then wait for approval */}
-      {accessLocked && (access.pendingApproval
-        ? <PendingGate user={user} onSignOut={handleSignOut} onRefresh={refreshSession} />
-        : <FeedbackDialog open mandatory onSubmitted={handleFeedbackSubmitted} user={user} />)}
+        {/* Access gate when the trial has lapsed: ask for feedback, then wait for approval */}
+        {accessLocked && (access.pendingApproval
+          ? <PendingGate user={user} onSignOut={handleSignOut} onRefresh={refreshSession} />
+          : <FeedbackDialog open mandatory onSubmitted={handleFeedbackSubmitted} user={user} />)}
 
-      {isAdmin && <AdminDialog open={adminOpen} onClose={() => setAdminOpen(false)} />}
+        {isAdmin && adminOpen && <AdminDialog open onClose={() => setAdminOpen(false)} />}
+      </Suspense>
 
       {/* Delete confirmation — guards against accidentally removing a saved study */}
       {pendingDelete && (

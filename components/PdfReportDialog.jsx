@@ -1,12 +1,66 @@
 import { useMemo, useState, useEffect } from "react";
 import {
-  Document, Page, View, Text, Svg, Rect, Line, Circle, Polyline, Polygon, G,
+  Document, Page, View, Text as RawText, Image, Svg, Rect, Line, Circle, Polyline, Polygon, G,
   StyleSheet, PDFViewer, pdf,
 } from "@react-pdf/renderer";
 import {
-  X, Printer, Download, Loader2, FileText, BarChart3, Table as TableIcon, Layers,
+  X, Printer, Download, Loader2, FileText, BarChart3, Table as TableIcon, Layers, ImagePlus,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+
+/* ─────────────────────────────────────────────────────────────
+   Universal-font text safety.
+   The report is drawn with the PDF base-14 fonts (Helvetica / Courier).
+   Those are mandated by the PDF spec to exist in every viewer, so the
+   file renders identically on any computer/browser with no embedded
+   font and no network fetch — the most portable choice there is. Their
+   catch is that they only cover the WinAnsi character set, so anything
+   outside it (Greek mu in "µg/L", ≤ / ≥, the x̄ combining bar…) prints as
+   a broken box. winAnsi() maps every such glyph to a WinAnsi-safe form —
+   a look-alike where one exists (μ → micro sign µ) or plain ASCII
+   (≤ → "<=") — and the Text wrapper below runs it over ALL text, both the
+   template's own labels and user-entered data (units, analyte, matrix,
+   the acceptance-requirement sentence), so nothing can slip through. */
+const CHAR_MAP = {
+  "μ": "µ", // μ Greek small mu  → µ micro sign (identical glyph, WinAnsi)
+  "≤": "<=",     // ≤ less-than-or-equal
+  "≥": ">=",     // ≥ greater-than-or-equal
+  "≪": "<<",     // ≪ much-less-than
+  "≫": ">>",     // ≫ much-greater-than
+  "≠": "!=",     // ≠ not equal
+  "≈": "~",      // ≈ approximately
+  "≡": "=",      // ≡ identical to
+  "−": "-",      // − minus sign → hyphen-minus
+  "⁄": "/",      // ⁄ fraction slash
+  "√": "sqrt",   // √ square root
+  "∞": "inf",    // ∞ infinity
+  "∑": "sum",    // ∑ n-ary summation
+  "∏": "prod",   // ∏ n-ary product
+  "∂": "d",      // ∂ partial differential
+  "Δ": "delta", "α": "alpha", "β": "beta", "γ": "gamma",
+  "δ": "delta", "ε": "epsilon", "θ": "theta", "λ": "lambda",
+  "π": "pi", "σ": "sigma", "τ": "tau", "φ": "phi",
+  "ω": "omega", "Ω": "ohm",
+};
+const winAnsi = (input) => {
+  if (input == null) return input;
+  let out = "";
+  for (const ch of String(input).normalize("NFC")) out += CHAR_MAP[ch] ?? ch;
+  // Drop any leftover combining marks / overlines the base fonts can't place
+  // (e.g. x̄ = x + U+0304). Precomposed accents like "é" survived NFC above.
+  return out.replace(/[̀-ͯ‾]/g, "");
+};
+const sanitizeChildren = (c) => {
+  if (typeof c === "string") return winAnsi(c);
+  if (typeof c === "number") return winAnsi(String(c));
+  if (Array.isArray(c)) return c.map(sanitizeChildren);
+  return c; // React elements (incl. nested Text) self-sanitize; null/false pass through
+};
+/* Drop-in replacement for @react-pdf's <Text>: same props, but every string it
+   renders is made WinAnsi-safe first. Used for page text and SVG chart labels. */
+function Text({ children, ...props }) {
+  return <RawText {...props}>{sanitizeChildren(children)}</RawText>;
+}
 
 /* ─────────────────────────────────────────────────────────────
    PDF report builder for LabValidate Pro.
@@ -73,8 +127,13 @@ const statusMeta = {
 const s = StyleSheet.create({
   page: { paddingTop: 34, paddingBottom: 46, paddingHorizontal: 40, fontFamily: "Helvetica", fontSize: 9, color: K.ink },
   brandRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 4 },
+  brandLeft: { flexDirection: "row", alignItems: "center", gap: 8, flex: 1, paddingRight: 10 },
+  brandRight: { alignItems: "flex-end" },
   brand: { fontSize: 13, fontFamily: "Helvetica-Bold", color: K.primary },
+  brandTitle: { fontSize: 10, fontFamily: "Helvetica-Bold", color: K.ink, marginTop: 1 },
   brandSub: { fontSize: 7.5, color: K.muted, fontFamily: "Helvetica" },
+  docControl: { fontSize: 7.5, color: K.muted, fontFamily: "Courier", marginTop: 2 },
+  logo: { height: 30, maxWidth: 140, objectFit: "contain" },
   rule: { borderBottomWidth: 1.2, borderBottomColor: K.primary, marginTop: 4, marginBottom: 12 },
 
   banner: { borderWidth: 1, borderRadius: 5, padding: 10, marginBottom: 14 },
@@ -717,7 +776,7 @@ function ResultUChart({ mu, gm, unit }) {
   const sx = scaler(lo - pad, hi + pad, PAD.l, CW - PAD.r);
   const cy = (PAD.t + CH - PAD.b) / 2;
   return (
-    <ChartBox title={`Result x̄ ± U (k=2) (${unit || ""})`}>
+    <ChartBox title={`Reported result ± U (k=2) (${unit || ""})`}>
       <Axes />
       <Rect x={sx(gm - uc)} y={PAD.t} width={Math.max(1, sx(gm + uc) - sx(gm - uc))} height={CH - PAD.b - PAD.t} fill={K.primary} fillOpacity={0.12} />
       <Line x1={sx(gm)} y1={PAD.t} x2={sx(gm)} y2={CH - PAD.b} stroke={K.pass} strokeWidth={0.8} strokeDasharray="3 2" />
@@ -990,6 +1049,7 @@ function DetailSection({ id, view, data }) {
 export function ReportDocument({ data, config }) {
   const { study, unit, isVerification, summaryRows, fit } = data;
   const info = study.info;
+  const header = config.header || {};
   const metaLine = [info.id, info.analyte, info.matrix, info.technique, info.range && `Range: ${info.range}`].filter(Boolean).join("  ·  ");
 
   return (
@@ -997,8 +1057,19 @@ export function ReportDocument({ data, config }) {
       <Page size="A4" style={s.page} wrap>
         {/* Header */}
         <View style={s.brandRow} fixed>
-          <Text style={s.brand}>LabValidate <Text style={{ color: K.ink }}>Pro</Text></Text>
-          <Text style={s.brandSub}>EURACHEM 3rd Ed. 2025  ·  ISO/IEC 17025:2017</Text>
+          <View style={s.brandLeft}>
+            {header.showLogo && header.logo ? <Image src={header.logo} style={s.logo} /> : null}
+            {(header.showBrand || header.title) ? (
+              <View>
+                {header.showBrand ? <Text style={s.brand}>LabValidate <Text style={{ color: K.ink }}>Pro</Text></Text> : null}
+                {header.title ? <Text style={s.brandTitle}>{header.title}</Text> : null}
+              </View>
+            ) : null}
+          </View>
+          <View style={s.brandRight}>
+            <Text style={s.brandSub}>EURACHEM 3rd Ed. 2025  ·  ISO/IEC 17025:2017</Text>
+            {header.showDocControl && header.docControl ? <Text style={s.docControl}>{header.docControl}</Text> : null}
+          </View>
         </View>
         <View style={s.rule} fixed />
 
@@ -1158,6 +1229,8 @@ export function PdfReportDialog({ open, onClose, data }) {
 
   const [config, setConfig] = useState(null);
   const [busy, setBusy] = useState(false);
+  // Debounced snapshot of `config` that drives the (expensive) live preview.
+  const [preview, setPreview] = useState({ config: null, ver: 0 });
 
   // Initialise config when the dialog opens.
   useEffect(() => {
@@ -1166,18 +1239,40 @@ export function PdfReportDialog({ open, onClose, data }) {
     SECTION_META.forEach((m) => {
       sections[m.id] = { on: !!avail[m.id], view: m.chart ? "both" : "table" };
     });
-    setConfig({
+    const cfg = {
       banner: true, summary: true, conclusion: true, signatures: true,
+      header: { showBrand: true, title: "", logo: null, showLogo: true, docControl: "", showDocControl: true },
       order: SECTION_META.map((m) => m.id),
       sections,
-    });
+    };
+    setConfig(cfg);
+    setPreview({ config: cfg, ver: 0 });
   }, [open, data]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Rendering the full PDF (many SVG charts, multiple pages) is costly, so
+  // coalesce rapid toggles/typing into a single rebuild ~350 ms after the last
+  // change instead of regenerating the document on every keystroke or click.
+  useEffect(() => {
+    if (!config) return;
+    const t = setTimeout(() => setPreview((p) => (p.config === config ? p : { config, ver: p.ver + 1 })), 350);
+    return () => clearTimeout(t);
+  }, [config]);
 
   if (!open || !prepared || !config) return null;
 
   const setCore = (key) => setConfig((c) => ({ ...c, [key]: !c[key] }));
+  const setHeader = (patch) => setConfig((c) => ({ ...c, header: { ...c.header, ...patch } }));
   const toggleSection = (id) => setConfig((c) => ({ ...c, sections: { ...c.sections, [id]: { ...c.sections[id], on: !c.sections[id].on } } }));
   const setView = (id, view) => setConfig((c) => ({ ...c, sections: { ...c.sections, [id]: { ...c.sections[id], on: true, view } } }));
+
+  const onLogoUpload = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => setHeader({ logo: reader.result, showLogo: true });
+    reader.readAsDataURL(file);
+    e.target.value = ""; // allow re-selecting the same file
+  };
 
   const fileName = `${prepared.study.info.id || "validation"}-report.pdf`;
   const docEl = <ReportDocument data={prepared} config={config} />;
@@ -1243,6 +1338,61 @@ export function PdfReportDialog({ open, onClose, data }) {
               ))}
             </div>
 
+            <div className="mb-2 mt-4 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Header &amp; branding</div>
+            <div className="space-y-2">
+              {/* Show the LabValidate Pro name */}
+              <label className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[13px] hover:bg-muted">
+                <input type="checkbox" checked={config.header.showBrand} onChange={() => setHeader({ showBrand: !config.header.showBrand })} className="h-4 w-4 accent-[hsl(var(--primary))]" />
+                <span>Show &ldquo;LabValidate Pro&rdquo; name</span>
+              </label>
+
+              {/* Custom header title / company name */}
+              <div className="px-2">
+                <label className="mb-1 block text-[11px] text-muted-foreground">Header title / company name</label>
+                <input type="text" value={config.header.title} onChange={(e) => setHeader({ title: e.target.value })}
+                  placeholder="e.g. Acme Analytical Laboratory"
+                  className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-[12px] outline-none focus:border-primary" />
+              </div>
+
+              {/* Company logo upload */}
+              <div className="px-2">
+                <label className="mb-1 block text-[11px] text-muted-foreground">Company logo</label>
+                {config.header.logo ? (
+                  <div className="flex items-center gap-2">
+                    <div className="flex h-10 w-20 items-center justify-center overflow-hidden rounded-md border border-border bg-white p-1">
+                      <img src={config.header.logo} alt="logo preview" className="max-h-full max-w-full object-contain" />
+                    </div>
+                    <label className="flex cursor-pointer items-center gap-1.5 text-[12px]">
+                      <input type="checkbox" checked={config.header.showLogo} onChange={() => setHeader({ showLogo: !config.header.showLogo })} className="h-3.5 w-3.5 accent-[hsl(var(--primary))]" />
+                      Show
+                    </label>
+                    <button type="button" onClick={() => setHeader({ logo: null })} className="text-[11px] text-muted-foreground underline hover:text-destructive">Remove</button>
+                  </div>
+                ) : (
+                  <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-dashed border-border px-2.5 py-1.5 text-[12px] text-muted-foreground hover:border-primary hover:text-primary">
+                    <ImagePlus className="h-3.5 w-3.5" />
+                    Upload image
+                    <input type="file" accept="image/*" onChange={onLogoUpload} className="hidden" />
+                  </label>
+                )}
+              </div>
+
+              {/* Document control / serial number */}
+              <div className="px-2">
+                <div className="mb-1 flex items-center justify-between">
+                  <span className="text-[11px] text-muted-foreground">Document control / serial no.</span>
+                  <label className="flex cursor-pointer items-center gap-1 text-[11px] text-muted-foreground">
+                    <input type="checkbox" checked={config.header.showDocControl} onChange={() => setHeader({ showDocControl: !config.header.showDocControl })} className="h-3.5 w-3.5 accent-[hsl(var(--primary))]" />
+                    On
+                  </label>
+                </div>
+                <input type="text" value={config.header.docControl} onChange={(e) => setHeader({ docControl: e.target.value })}
+                  placeholder="e.g. DOC-VAL-001 Rev.2"
+                  disabled={!config.header.showDocControl}
+                  className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-[12px] outline-none focus:border-primary disabled:opacity-50" />
+              </div>
+            </div>
+
             <div className="mb-2 mt-4 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Detailed sections</div>
             <div className="space-y-1.5">
               {SECTION_META.map((m) => {
@@ -1281,8 +1431,8 @@ export function PdfReportDialog({ open, onClose, data }) {
 
           {/* Right: live preview */}
           <div className="min-h-0 flex-1 bg-muted/40 p-3">
-            <PDFViewer key={JSON.stringify(config)} showToolbar={false} style={{ width: "100%", height: "100%", border: "none", borderRadius: 8, background: "white" }}>
-              {docEl}
+            <PDFViewer key={preview.ver} showToolbar={false} style={{ width: "100%", height: "100%", border: "none", borderRadius: 8, background: "white" }}>
+              <ReportDocument data={prepared} config={preview.config || config} />
             </PDFViewer>
           </div>
         </div>
