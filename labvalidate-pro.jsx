@@ -1197,54 +1197,81 @@ const DGA_REAL = {
 
 const DGA_CTRL = 312.5;     // µL/L control level (500 µL/L gas-in-oil std @ 200 mmHg)
 const DGA_CTRL_U = 5;       // standard uncertainty of the control (≈ std-gas cal cert)
-// 6-point working calibration as run in the lab (100–1000 µL/L). The 800 µL/L
-// point is assumed to complete the six; the others are the stated levels.
-const DGA_CAL = [100, 200, 400, 500, 800, 1000];
+
+// Real calibration from the documented MU study: the 500 µL/L gas-in-oil
+// standard admitted at 100/160/200/280/320 mmHg → these true concentrations,
+// with the instrument readings (µL/L) recorded per gas below. Feeding these to
+// the linearity module lets the app derive each gas's LOD/LOQ by the ICH route
+// (LOD = 3.3·Sy/x / b₁, LOQ = 10·Sy/x / b₁) from real regression scatter.
+const DGA_CAL_CONC = [156.25, 250, 312.5, 437.5, 500];
+const DGA_CAL_Y = {
+  hydrogen:  [164, 263, 327, 451, 521],
+  methane:   [157, 254, 319, 436, 502],
+  ethane:    [157, 254, 316, 441, 499],
+  ethylene:  [157, 253, 313, 439, 505],
+  acetylene: [158, 251, 313, 438, 501],
+  co:        [159, 255, 322, 448, 509],
+  co2:       [161, 253, 316, 443, 506],
+};
+// least-squares slope + residual SD (Sy/x), matching the app's own regression
+const dgaReg = (x, y) => {
+  const n = x.length, mx = x.reduce((a, b) => a + b, 0) / n, my = y.reduce((a, b) => a + b, 0) / n;
+  let sxy = 0, sxx = 0;
+  for (let i = 0; i < n; i++) { sxy += (x[i] - mx) * (y[i] - my); sxx += (x[i] - mx) ** 2; }
+  const slope = sxy / sxx, intercept = my - slope * mx;
+  const ssr = x.reduce((s, xi, i) => s + (y[i] - (slope * xi + intercept)) ** 2, 0);
+  return { slope, syx: Math.sqrt(ssr / (n - 2)) };
+};
+const dgaLod = (calY) => {
+  const { slope, syx } = dgaReg(DGA_CAL_CONC, calY);
+  return { lod: (3.3 * syx) / slope, loq: (10 * syx) / slope };
+};
 const blankPat = [0.20, 0.55, 0.85, 0.35, 0.65, 0.15, 0.75, 0.45, 0.90, 0.25];
 const symOf = (analyte) => analyte.slice(analyte.indexOf("(") + 1, analyte.indexOf(")"));
 
 // The seven fault gases — built from the real verification data above.
 const DGA_FAULT = [
-  { key: "h2",   sop: "H2",   real: "hydrogen",  analyte: "Hydrogen (H₂)",        detector: "TCD",              lod: 5 },
-  { key: "ch4",  sop: "CH4",  real: "methane",   analyte: "Methane (CH₄)",        detector: "FID",              lod: 1 },
-  { key: "c2h6", sop: "C2H6", real: "ethane",    analyte: "Ethane (C₂H₆)",        detector: "FID",              lod: 1 },
-  { key: "c2h4", sop: "C2H4", real: "ethylene",  analyte: "Ethylene (C₂H₄)",      detector: "FID",              lod: 1 },
-  { key: "c2h2", sop: "C2H2", real: "acetylene", analyte: "Acetylene (C₂H₂)",     detector: "FID",              lod: 1 },
-  { key: "co",   sop: "CO",   real: "co",        analyte: "Carbon monoxide (CO)", detector: "methaniser + FID", lod: 2 },
-  { key: "co2",  sop: "CO2",  real: "co2",       analyte: "Carbon dioxide (CO₂)", detector: "methaniser + FID", lod: 5 },
+  { key: "h2",   sop: "H2",   real: "hydrogen",  analyte: "Hydrogen (H₂)",        detector: "TCD" },
+  { key: "ch4",  sop: "CH4",  real: "methane",   analyte: "Methane (CH₄)",        detector: "FID" },
+  { key: "c2h6", sop: "C2H6", real: "ethane",    analyte: "Ethane (C₂H₆)",        detector: "FID" },
+  { key: "c2h4", sop: "C2H4", real: "ethylene",  analyte: "Ethylene (C₂H₄)",      detector: "FID" },
+  { key: "c2h2", sop: "C2H2", real: "acetylene", analyte: "Acetylene (C₂H₂)",     detector: "FID" },
+  { key: "co",   sop: "CO",   real: "co",        analyte: "Carbon monoxide (CO)", detector: "methaniser + FID" },
+  { key: "co2",  sop: "CO2",  real: "co2",       analyte: "Carbon dioxide (CO₂)", detector: "methaniser + FID" },
 ];
 
 const buildDgaFault = (g) => {
   const d = DGA_REAL[g.real];
+  const calY = DGA_CAL_Y[g.real];
   const sym = symOf(g.analyte);
-  const lod = g.lod;
-  const spike = dgaSig(3 * lod, 2);
+  // LOD/LOQ derived from the real calibration by the ICH route (app recomputes the same)
+  const { lod, loq } = dgaLod(calY);
+  const lodR = dgaSig(lod, 2), loqR = dgaSig(loq, 2);
   const cmpAll = [...d.cmpA, ...d.cmpB];
   const cmpMean = dgaSig(cmpAll.reduce((a, b) => a + b, 0) / cmpAll.length, 3);
-  const top = DGA_CAL[DGA_CAL.length - 1];
+  const top = DGA_CAL_CONC[DGA_CAL_CONC.length - 1];
   return {
     id: `ex-dga-${g.key}`,
     name: `${g.analyte} in transformer oil — DGA, IEC 60567 (GC HP4)`,
-    blurb: `Real GC-HP4 verification for ${sym}: ${DGA_CAL.length}-point calibration (${DGA_CAL[0]}–${top} µL/L), detection limit ~${lod} µL/L, intermediate-precision QC at the ${DGA_CTRL} µL/L control, trueness/recovery vs the gas-in-oil standard, ruggedness, and a GC-to-GC method comparison.`,
+    blurb: `Real GC-HP4 verification for ${sym}: ${DGA_CAL_CONC.length}-point calibration (${DGA_CAL_CONC[0]}–${top} µL/L), LOD ≈ ${lodR} / LOQ ≈ ${loqR} µL/L (from the calibration, ICH 3.3·Sy/x ⁄ b₁), intermediate-precision QC at the ${DGA_CTRL} µL/L control, trueness/recovery vs the gas-in-oil standard, ruggedness, and a GC-to-GC method comparison.`,
     study: buildExample(
       {
         title: `Determination of dissolved ${g.analyte} in insulating oil by DGA (vacuum extraction–GC)`,
         id: `SOP-DGA-${g.sop}-001`, standard: "IEC 60567; interpretation IEC 60599",
         analyte: g.analyte, matrix: DGA_MATRIX,
         technique: `Vacuum (Toepler) extraction + gas chromatography (${g.detector}); GC HP4 / 8890`,
-        unit: "µL/L", range: `${lod}–${top} µL/L`, type: "validation", reviewer: "QA Manager",
-        requirement: `LOD ≈ ${lod} µL/L; RSD ≤ 5 % at the control level; recovery 90–110 %; bias within the standard's uncertainty`,
+        unit: "µL/L", range: `${lodR}–${top} µL/L`, type: "validation", reviewer: "QA Manager",
+        requirement: `LOD ≈ ${lodR} µL/L, LOQ ≈ ${loqR} µL/L (from calibration); RSD ≤ 5 % at the control level; recovery 90–110 %; bias within the standard's uncertainty`,
         intendedUse: `Quantify dissolved ${sym} as part of the 9-gas DGA panel (H₂, CH₄, C₂H₆, C₂H₄, C₂H₂, CO, CO₂, O₂, N₂) for transformer fault diagnosis per IEC 60599.`,
       },
       {
-        // GC reports directly in µL/L, so the calibration verifies reported vs true concentration
-        linearity: { points: DGA_CAL.map((c) => ({ conc: c, reps: dgaSeries(c, [0.004, -0.003, 0.001]) })) },
+        // Real calibration: 500 µL/L standard admitted at 100–320 mmHg → true conc vs reading
+        linearity: { points: DGA_CAL_CONC.map((c, i) => ({ conc: c, reps: [calY[i]] })) },
         lodloq: {
-          approach: "blank", blankType: "reagent", blankCorrected: true, n: 1, nb: 10,
-          reps: blankPat.map((p) => dgaSig(p * lod)),
-          slopeFromCal: true, manualSlope: "", idlK: 3, spikeLevel: spike,
-          idlReps: dgaSeries(lod, [0.1, -0.2, 0.3, 0.0, 0.2, -0.1, 0.15]),
-          mdlSpiked: dgaSeries(spike, [0.03, -0.04, 0.02, -0.01, 0.05, -0.03, 0.01]), mdlBlank: [],
+          // LOD/LOQ taken straight from the calibration regression (ICH 3.3·Sy/x / b₁)
+          approach: "calibration", slopeFromCal: true, manualSlope: "",
+          blankType: "reagent", blankCorrected: true, n: 1, nb: 10, reps: [],
+          idlK: 3, spikeLevel: "", idlReps: [], mdlSpiked: [], mdlBlank: [],
         },
         precision: { label: "Day", massFraction: dgaSig(DGA_CTRL * 1e-6, 3), sRMeasured: "", groups: d.prec },
         trueness: {
