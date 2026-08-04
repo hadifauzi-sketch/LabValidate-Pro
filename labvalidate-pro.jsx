@@ -1548,6 +1548,66 @@ const EXAMPLES = [
   ...DGA_EXAMPLES,
   ...VISC_EXAMPLES,
   {
+    id: "ex-fur-hplc",
+    name: "Furanic compounds (2-FAL) in insulating oil — HPLC, IEC 61198 (full validation)",
+    blurb: "Complete validation of 2-furfural by HPLC-UV (277 nm) after liquid–liquid extraction: linearity, LOD/LOQ, ANOVA precision, trueness vs a gravimetric standard, recovery, ruggedness, and an LLE-vs-SPE (Method A vs B) comparison. 2-FAL tracks cellulose/paper ageing.",
+    study: buildExample(
+      {
+        title: "Determination of 2-furfural and related furanic compounds in insulating oil by HPLC",
+        id: "SOP-FUR-2FAL-001", standard: "IEC 61198:1993",
+        analyte: "2-Furfural (2-FAL)", matrix: "Mineral insulating oil (transformer oil)",
+        technique: "HPLC–UV (277 nm); liquid–liquid extraction (Method A)", unit: "mg/kg", range: "0.05–5 mg/kg",
+        type: "validation", reviewer: "QA Manager",
+        requirement: "LOQ ≤ 0.05 mg/kg; R² ≥ 0.995; RSD ≤ 10 % at 1 mg/kg; recovery 80–110 %",
+        intendedUse: "Quantify 2-furfural (and related furans: 5-HMF, 2-FOL, 2-ACF, 5-MEF) as a marker of cellulosic-paper ageing (degree of polymerisation) in oil-filled equipment.",
+      },
+      {
+        linearity: { points: [
+          { conc: 0.05, reps: [520, 515, 524] },
+          { conc: 0.10, reps: [1035, 1028, 1041] },
+          { conc: 0.50, reps: [5180, 5165, 5192] },
+          { conc: 1.00, reps: [10320, 10345, 10298] },
+          { conc: 2.00, reps: [20610, 20670, 20560] },
+          { conc: 5.00, reps: [51600, 51500, 51720] },
+        ] },
+        lodloq: {
+          approach: "blank", blankType: "reagent", blankCorrected: true, n: 1, nb: 10,
+          reps: [0.008, 0.004, 0.011, 0.006, 0.012, 0.003, 0.009, 0.007, 0.010, 0.005],
+          slopeFromCal: true, manualSlope: "", idlK: 3, spikeLevel: 0.05,
+          idlReps: [0.003, 0.004, 0.002, 0.004, 0.003, 0.005, 0.003], mdlSpiked: [0.048, 0.052, 0.046, 0.051, 0.049, 0.053, 0.047], mdlBlank: [],
+        },
+        precision: {
+          label: "Day", massFraction: 1e-6, sRMeasured: "",
+          groups: [
+            [1.02, 0.98, 1.01], [0.99, 1.03, 1.00], [1.01, 0.97, 1.02], [0.98, 1.00, 1.04],
+            [1.03, 0.99, 1.01], [0.97, 1.02, 1.00], [1.00, 1.04, 0.98], [1.02, 0.99, 1.01],
+          ],
+        },
+        trueness: {
+          mode: "crm", crmRef: 1.0, crmU: 0.03,
+          crmReps: [0.99, 1.01, 1.02, 0.98, 1.00, 0.97, 1.01, 0.99, 1.02, 1.00],
+          spikeMethod: "apha", spikeAmount: 0.8, unspiked: [0.20, 0.21, 0.19, 0.20, 0.22], spiked: [1.00, 0.99, 1.01, 0.98, 1.02],
+          vSpl: 100, vSpk: 1, cSpk: 80,
+        },
+        recovery: { levels: [
+          { conc: 0.10, reps: [0.096, 0.098, 0.101, 0.097, 0.103] },
+          { conc: 1.00, reps: [0.98, 1.01, 0.99, 1.02, 0.97] },
+          { conc: 3.00, reps: [2.94, 2.98, 3.02, 2.96, 3.01] },
+        ] },
+        robustness: { factors: [
+          { name: "Mobile phase acetonitrile (%)", nominal: "50", low: "45", high: "55", resLow: 1.01, resHigh: 0.99 },
+          { name: "Column temperature (°C)", nominal: "30", low: "25", high: "35", resLow: 0.995, resHigh: 1.004 },
+          { name: "Flow rate (mL/min)", nominal: "1.0", low: "0.9", high: "1.1", resLow: 1.003, resHigh: 0.998 },
+        ] },
+        comparison: {
+          mode: "twoSample", labelA: "LLE extraction (Method A)", labelB: "SPE cartridge (Method B)",
+          dataA: [1.02, 0.99, 1.01, 1.00, 1.03, 0.98], dataB: [1.00, 1.02, 0.99, 1.01, 0.97],
+          refValue: 1.0, srcA: "0", srcB: "1",
+        },
+      },
+    ),
+  },
+  {
     id: "ex-pb-icpms",
     name: "Lead in drinking water — ICP-MS (method verification)",
     blurb: "Verification of a standard method: confirms the lab meets published precision, bias (vs CRM) and recovery, then compares results with the reference laboratory.",
