@@ -4,7 +4,7 @@ import {
   Download, Upload, Sun, Moon, Printer, Target, Layers, Shield, Activity,
   Beaker, Ruler, Crosshair, Repeat, GitCompareArrows, Sigma, ClipboardList,
   CircleDashed, ChevronRight, ChevronUp, ChevronDown, Info, Calendar as CalendarIcon,
-  Library, Save, X, FolderOpen, FilePlus,
+  Library, Save, X, FolderOpen, FilePlus, Search,
   Settings, LogIn, LogOut, LayoutDashboard, Cloud, Loader2, ArrowLeft, UserCircle2,
   MessageSquare, Clock,
 } from "lucide-react";
@@ -1855,6 +1855,14 @@ export default function LabValidatePro() {
   // Open a confirmation modal before running a destructive delete. onConfirm runs only if the user confirms.
   const askDelete = (message, onConfirm, title = "Delete this item?") => setConfirmDel({ title, message, onConfirm });
   const [presetName, setPresetName] = useState("");
+  const [presetQuery, setPresetQuery] = useState(""); // search filter for the presets modal
+  const presetQ = presetQuery.trim().toLowerCase();
+  const filteredExamples = presetQ
+    ? EXAMPLES.filter((ex) => `${ex.name} ${ex.blurb}`.toLowerCase().includes(presetQ))
+    : EXAMPLES;
+  const filteredPresets = presetQ
+    ? presets.filter((e) => [e.name, e.analyte, e.matrix].filter(Boolean).join(" ").toLowerCase().includes(presetQ))
+    : presets;
   const [folderName, setFolderName] = useState(null);
   const [newOpen, setNewOpen] = useState(false);
   const canUseFolder = presetStore.supported();
@@ -2233,6 +2241,7 @@ export default function LabValidatePro() {
   };
   const openPresets = async () => {
     setPresetName(study.info.title || study.info.id || "");
+    setPresetQuery("");
     setPresetsOpen(true);
     if (!presetStore.cloudEnabled()) {
       const n = await presetStore.restoreFolder();   // re-attach the user's folder if one was chosen
@@ -4523,9 +4532,28 @@ export default function LabValidatePro() {
 
               {/* Examples — the one scrollable region; the rest of the modal stays fixed */}
               <div className="flex min-h-0 flex-1 flex-col space-y-2">
-                <div className="shrink-0 text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Examples — load a worked study</div>
+                <div className="shrink-0 flex items-center justify-between gap-2">
+                  <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Examples — load a worked study</div>
+                  {presetQ && <div className="text-[10px] text-muted-foreground">{filteredExamples.length} match{filteredExamples.length === 1 ? "" : "es"}</div>}
+                </div>
+                <div className="relative shrink-0">
+                  <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                  <Input value={presetQuery} onChange={(e) => setPresetQuery(e.target.value)}
+                    placeholder="Search studies — analyte, technique, standard…"
+                    className="h-8 bg-card pl-8 pr-8 text-sm" />
+                  {presetQuery && (
+                    <button type="button" onClick={() => setPresetQuery("")} aria-label="Clear search"
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  )}
+                </div>
                 <div className="min-h-0 flex-1 overflow-y-auto space-y-1.5 pr-1">
-                  {EXAMPLES.map((ex) => (
+                  {filteredExamples.length === 0 ? (
+                    <div className="rounded-lg border border-dashed border-border px-3 py-6 text-center text-[12px] text-muted-foreground">
+                      No examples match “{presetQuery}”.
+                    </div>
+                  ) : filteredExamples.map((ex) => (
                     <div key={ex.id} className="flex items-center gap-2 rounded-lg border border-border px-3 py-2 hover:bg-muted/40">
                       <div className="min-w-0 flex-1">
                         <div className="text-[13px] font-medium truncate">{ex.name}</div>
@@ -4557,9 +4585,13 @@ export default function LabValidatePro() {
                   <div className="rounded-lg border border-dashed border-border px-3 py-6 text-center text-[12px] text-muted-foreground">
                     No saved studies yet. Name and save the current one above.
                   </div>
+                ) : filteredPresets.length === 0 ? (
+                  <div className="rounded-lg border border-dashed border-border px-3 py-6 text-center text-[12px] text-muted-foreground">
+                    No saved studies match “{presetQuery}”.
+                  </div>
                 ) : (
                   <div className="max-h-[28vh] overflow-y-auto space-y-1.5 pr-1">
-                    {presets.map((e) => (
+                    {filteredPresets.map((e) => (
                       <div key={e.id} className="flex items-center gap-2 rounded-lg border border-border px-3 py-2 hover:bg-muted/40">
                         <div className="min-w-0 flex-1">
                           <div className="text-[13px] font-medium truncate">{e.name}</div>
