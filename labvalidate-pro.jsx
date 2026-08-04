@@ -1127,12 +1127,19 @@ const buildExample = (info, mods) => {
 
 /* ────────────────────────────────────────────────────────────────
    DGA (IEC 60567) — the nine dissolved gases, each a full worked study
-   with its OWN calibration curve and detection limit. Gases are freed
-   from the oil by headspace extraction and quantified by GC: a TCD for
-   the fixed gases (H₂, O₂, N₂), an FID for the hydrocarbons, and an FID
-   preceded by a methaniser for the carbon oxides. Results are volume
-   ratios (µL/L, i.e. ppm v/v). One study is generated per gas from the
-   table below so each keeps its own calibration, LOD/LOQ and criteria.
+   with its OWN calibration and detection limit. Gases are freed from the
+   oil by vacuum (Toepler) extraction and quantified by GC on the lab's
+   HP4 / 8890 system: a TCD for the fixed gases (H₂, O₂, N₂), an FID for
+   the hydrocarbons, and an FID preceded by a methaniser for the carbon
+   oxides. Results are volume ratios (µL/L, i.e. ppm v/v).
+
+   The seven fault gases (H₂, CH₄, C₂H₆, C₂H₄, C₂H₂, CO, CO₂) are built
+   from the lab's REAL verification data: intermediate-precision QC at the
+   312.5 µL/L control level (a 500 µL/L gas-in-oil standard admitted at
+   200 mmHg), replicate trueness/recovery readings, and a GC-to-GC method
+   comparison on a common oil sample. O₂ and N₂ have no QC series in the
+   records, so they keep illustrative (modelled) data over realistic
+   sample ranges and are flagged as such.
    ──────────────────────────────────────────────────────────────── */
 const DGA_MATRIX = "Mineral insulating oil (transformer oil)";
 // round to n significant figures so the synthetic data reads sensibly
@@ -1144,38 +1151,148 @@ const dgaSig = (x, n = 4) => {
 };
 const dgaSeries = (center, offsets, n = 4) => offsets.map((o) => dgaSig(center * (1 + o), n));
 
-const DGA_GASES = [
-  { key: "h2",   sop: "H2",   analyte: "Hydrogen (H₂)",        detector: "TCD",              lod: 2,   work: 100,   crmRef: 100,   crmU: 5,    range: "5–500 µL/L",       cal: [5, 25, 50, 100, 250, 500],                 spike: 5 },
-  { key: "ch4",  sop: "CH4",  analyte: "Methane (CH₄)",        detector: "FID",              lod: 1,   work: 60,    crmRef: 60,    crmU: 3,    range: "1–500 µL/L",       cal: [2, 10, 50, 100, 250, 500],                 spike: 2 },
-  { key: "c2h6", sop: "C2H6", analyte: "Ethane (C₂H₆)",        detector: "FID",              lod: 1,   work: 50,    crmRef: 50,    crmU: 3,    range: "1–500 µL/L",       cal: [2, 10, 50, 100, 250, 500],                 spike: 2 },
-  { key: "c2h4", sop: "C2H4", analyte: "Ethylene (C₂H₄)",      detector: "FID",              lod: 1,   work: 50,    crmRef: 50,    crmU: 3,    range: "1–500 µL/L",       cal: [2, 10, 50, 100, 250, 500],                 spike: 2 },
-  { key: "c2h2", sop: "C2H2", analyte: "Acetylene (C₂H₂)",     detector: "FID",              lod: 0.5, work: 10,    crmRef: 10,    crmU: 1,    range: "0.5–100 µL/L",     cal: [1, 5, 10, 25, 50, 100],                    spike: 1 },
-  { key: "co",   sop: "CO",   analyte: "Carbon monoxide (CO)", detector: "methaniser + FID", lod: 2,   work: 300,   crmRef: 300,   crmU: 15,   range: "5–2000 µL/L",      cal: [10, 50, 100, 500, 1000, 2000],             spike: 10 },
-  { key: "co2",  sop: "CO2",  analyte: "Carbon dioxide (CO₂)", detector: "methaniser + FID", lod: 5,   work: 2000,  crmRef: 2000,  crmU: 100,  range: "20–5000 µL/L",     cal: [50, 200, 1000, 2000, 3500, 5000],          spike: 50 },
-  { key: "o2",   sop: "O2",   analyte: "Oxygen (O₂)",          detector: "TCD",              lod: 50,  work: 8000,  crmRef: 8000,  crmU: 400,  range: "100–50000 µL/L",   cal: [500, 2000, 5000, 10000, 25000, 50000],     spike: 500 },
-  { key: "n2",   sop: "N2",   analyte: "Nitrogen (N₂)",        detector: "TCD",              lod: 100, work: 45000, crmRef: 45000, crmU: 2000, range: "1000–100000 µL/L", cal: [2000, 10000, 25000, 50000, 75000, 100000], spike: 2000 },
+// ── Real GC-HP4 verification data (8890 GC System, vacuum extraction) ──
+//  prec  : intermediate-precision QC at the 312.5 µL/L control level,
+//          grouped 8 "days" × 3 replicates (from the QC control charts).
+//  crm   : replicate control readings used for the trueness/recovery check.
+//  cmpA  : same oil sample measured on GC HP4 (in-house reference system).
+//  cmpB  : the same sample measured on the other GC systems (HP1/PE/HP2).
+const DGA_REAL = {
+  hydrogen: {
+    prec: [[316, 317, 316], [317, 318, 314], [317, 315, 314], [309, 313, 313], [321, 317, 307], [312, 318, 312], [316, 322, 313], [317, 318, 317]],
+    crm: [316, 321, 319, 317, 312, 312, 310, 312, 313, 317],
+    cmpA: [3.75, 2.2, 4.01, 10, 11], cmpB: [0, 5, 8],
+  },
+  methane: {
+    prec: [[311, 304, 315], [312, 311, 309], [311, 311, 308], [306, 313, 316], [318, 318, 316], [314, 315, 314], [311, 315, 307], [314, 315, 314]],
+    crm: [311, 309, 314, 308, 307, 312, 314, 313, 307, 314],
+    cmpA: [10.43, 10.08, 10.06, 10, 10], cmpB: [10, 9, 9],
+  },
+  ethane: {
+    prec: [[330, 314, 317], [317, 319, 314], [311, 318, 315], [309, 315, 312], [316, 315, 310], [316, 317, 317], [315, 316, 306], [306, 317, 318]],
+    crm: [330, 312, 308, 311, 309, 313, 319, 316, 310, 318],
+    cmpA: [171.37, 175.15, 167.02, 168, 183], cmpB: [175, 158, 138],
+  },
+  ethylene: {
+    prec: [[306, 319, 309], [311, 307, 307], [308, 318, 315], [307, 312, 316], [319, 318, 309], [312, 317, 315], [318, 317, 306], [315, 319, 319]],
+    crm: [306, 314, 306, 306, 313, 316, 316, 315, 308, 319],
+    cmpA: [351.7, 350.72, 346.84, 342, 374], cmpB: [350, 332, 281],
+  },
+  acetylene: {
+    prec: [[306, 317, 310], [317, 308, 311], [312, 308, 316], [317, 311, 316], [314, 309, 315], [315, 314, 318], [315, 313, 306], [313, 317, 317]],
+    crm: [306, 316, 308, 313, 314, 312, 314, 309, 306, 317],
+    cmpA: [227.49, 217.36, 226.21, 254, 262], cmpB: [264, 305, 189],
+  },
+  co: {
+    prec: [[311, 314, 317], [309, 306, 308], [309, 310, 316], [311, 315, 318], [315, 309, 309], [311, 308, 310], [311, 314, 310], [314, 313, 315]],
+    crm: [311, 308, 310, 309, 313, 309, 310, 311, 309, 315],
+    cmpA: [39.91, 37.94, 42.25, 41, 45], cmpB: [53, 46, 49],
+  },
+  co2: {
+    prec: [[315, 306, 317], [307, 315, 316], [313, 315, 311], [314, 315, 318], [319, 311, 313], [317, 311, 312], [315, 319, 311], [306, 313, 313]],
+    crm: [315, 317, 308, 314, 314, 316, 318, 319, 312, 313],
+    cmpA: [1233.85, 1228.28, 1198.61, 1217, 1334], cmpB: [1054, 998, 1045],
+  },
+};
+
+const DGA_CTRL = 312.5;     // µL/L control level (500 µL/L gas-in-oil std @ 200 mmHg)
+const DGA_CTRL_U = 5;       // standard uncertainty of the control (≈ std-gas cal cert)
+// 6-point working calibration as run in the lab (100–1000 µL/L). The 800 µL/L
+// point is assumed to complete the six; the others are the stated levels.
+const DGA_CAL = [100, 200, 400, 500, 800, 1000];
+const blankPat = [0.20, 0.55, 0.85, 0.35, 0.65, 0.15, 0.75, 0.45, 0.90, 0.25];
+const symOf = (analyte) => analyte.slice(analyte.indexOf("(") + 1, analyte.indexOf(")"));
+
+// The seven fault gases — built from the real verification data above.
+const DGA_FAULT = [
+  { key: "h2",   sop: "H2",   real: "hydrogen",  analyte: "Hydrogen (H₂)",        detector: "TCD",              lod: 5 },
+  { key: "ch4",  sop: "CH4",  real: "methane",   analyte: "Methane (CH₄)",        detector: "FID",              lod: 1 },
+  { key: "c2h6", sop: "C2H6", real: "ethane",    analyte: "Ethane (C₂H₆)",        detector: "FID",              lod: 1 },
+  { key: "c2h4", sop: "C2H4", real: "ethylene",  analyte: "Ethylene (C₂H₄)",      detector: "FID",              lod: 1 },
+  { key: "c2h2", sop: "C2H2", real: "acetylene", analyte: "Acetylene (C₂H₂)",     detector: "FID",              lod: 1 },
+  { key: "co",   sop: "CO",   real: "co",        analyte: "Carbon monoxide (CO)", detector: "methaniser + FID", lod: 2 },
+  { key: "co2",  sop: "CO2",  real: "co2",       analyte: "Carbon dioxide (CO₂)", detector: "methaniser + FID", lod: 5 },
 ];
 
-const buildDgaExample = (g) => {
-  const { analyte, detector, lod, work, crmRef, crmU, range, cal, spike, sop } = g;
-  const sym = analyte.slice(analyte.indexOf("(") + 1, analyte.indexOf(")")); // e.g. "C₂H₂"
-  const u = dgaSig(0.2 * work);   // background (unspiked) level
-  const sa = dgaSig(0.8 * work);  // spike addition, so recovered ≈ 100 %
-  // blank noise for the LOD/LOQ (blank) approach — spread chosen so 3·SD ≈ LOD
-  const blankPat = [0.20, 0.55, 0.85, 0.35, 0.65, 0.15, 0.75, 0.45, 0.90, 0.25];
+const buildDgaFault = (g) => {
+  const d = DGA_REAL[g.real];
+  const sym = symOf(g.analyte);
+  const lod = g.lod;
+  const spike = dgaSig(3 * lod, 2);
+  const cmpAll = [...d.cmpA, ...d.cmpB];
+  const cmpMean = dgaSig(cmpAll.reduce((a, b) => a + b, 0) / cmpAll.length, 3);
+  const top = DGA_CAL[DGA_CAL.length - 1];
   return {
     id: `ex-dga-${g.key}`,
-    name: `${analyte} in transformer oil — DGA, IEC 60567 (full validation)`,
-    blurb: `Dissolved gas analysis for ${sym} by headspace extraction + GC (${detector}): its own calibration (${range}) and detection limit (~${lod} µL/L), with LOD/LOQ, ANOVA precision, trueness vs a gas-in-oil standard, recovery, ruggedness and an F/t comparison vs the reference laboratory.`,
+    name: `${g.analyte} in transformer oil — DGA, IEC 60567 (GC HP4)`,
+    blurb: `Real GC-HP4 verification for ${sym}: ${DGA_CAL.length}-point calibration (${DGA_CAL[0]}–${top} µL/L), detection limit ~${lod} µL/L, intermediate-precision QC at the ${DGA_CTRL} µL/L control, trueness/recovery vs the gas-in-oil standard, ruggedness, and a GC-to-GC method comparison.`,
     study: buildExample(
       {
-        title: `Determination of dissolved ${analyte} in insulating oil by DGA (headspace–GC)`,
-        id: `SOP-DGA-${sop}-001`, standard: "IEC 60567:2011; interpretation IEC 60599",
-        analyte, matrix: DGA_MATRIX,
-        technique: `Gas extraction (headspace) + gas chromatography (${detector})`,
-        unit: "µL/L", range, type: "validation", reviewer: "QA Manager",
-        requirement: `LOD ≈ ${lod} µL/L; RSD ≤ 10 % at the working level; recovery 90–110 %; bias within CRM uncertainty`,
+        title: `Determination of dissolved ${g.analyte} in insulating oil by DGA (vacuum extraction–GC)`,
+        id: `SOP-DGA-${g.sop}-001`, standard: "IEC 60567; interpretation IEC 60599",
+        analyte: g.analyte, matrix: DGA_MATRIX,
+        technique: `Vacuum (Toepler) extraction + gas chromatography (${g.detector}); GC HP4 / 8890`,
+        unit: "µL/L", range: `${lod}–${top} µL/L`, type: "validation", reviewer: "QA Manager",
+        requirement: `LOD ≈ ${lod} µL/L; RSD ≤ 5 % at the control level; recovery 90–110 %; bias within the standard's uncertainty`,
         intendedUse: `Quantify dissolved ${sym} as part of the 9-gas DGA panel (H₂, CH₄, C₂H₆, C₂H₄, C₂H₂, CO, CO₂, O₂, N₂) for transformer fault diagnosis per IEC 60599.`,
+      },
+      {
+        // GC reports directly in µL/L, so the calibration verifies reported vs true concentration
+        linearity: { points: DGA_CAL.map((c) => ({ conc: c, reps: dgaSeries(c, [0.004, -0.003, 0.001]) })) },
+        lodloq: {
+          approach: "blank", blankType: "reagent", blankCorrected: true, n: 1, nb: 10,
+          reps: blankPat.map((p) => dgaSig(p * lod)),
+          slopeFromCal: true, manualSlope: "", idlK: 3, spikeLevel: spike,
+          idlReps: dgaSeries(lod, [0.1, -0.2, 0.3, 0.0, 0.2, -0.1, 0.15]),
+          mdlSpiked: dgaSeries(spike, [0.03, -0.04, 0.02, -0.01, 0.05, -0.03, 0.01]), mdlBlank: [],
+        },
+        precision: { label: "Day", massFraction: dgaSig(DGA_CTRL * 1e-6, 3), sRMeasured: "", groups: d.prec },
+        trueness: {
+          mode: "crm", crmRef: DGA_CTRL, crmU: DGA_CTRL_U, crmReps: d.crm,
+          spikeMethod: "apha", spikeAmount: DGA_CTRL,
+          unspiked: [0, 0, 0, 0, 0], spiked: d.crm.slice(0, 5),
+          vSpl: 80, vSpk: 1, cSpk: dgaSig(DGA_CTRL * 81),
+        },
+        recovery: { levels: [{ conc: DGA_CTRL, reps: d.crm.slice(0, 5) }] },
+        robustness: { factors: [
+          { name: "Extraction vacuum time (min)", nominal: "3", low: "2", high: "4", resLow: dgaSig(DGA_CTRL * 0.997), resHigh: dgaSig(DGA_CTRL * 1.004) },
+          { name: "Column oven temperature (°C)", nominal: "70", low: "65", high: "75", resLow: dgaSig(DGA_CTRL * 1.003), resHigh: dgaSig(DGA_CTRL * 0.998) },
+          { name: "Carrier gas flow (mL/min)", nominal: "30", low: "27", high: "33", resLow: dgaSig(DGA_CTRL * 0.999), resHigh: dgaSig(DGA_CTRL * 1.002) },
+        ] },
+        comparison: {
+          mode: "twoSample", labelA: "GC HP4 (in-house)", labelB: "Other GC systems (HP1/PE/HP2)",
+          dataA: d.cmpA, dataB: d.cmpB, refValue: cmpMean, srcA: "0", srcB: "1",
+        },
+      },
+    ),
+  };
+};
+
+// Oxygen and Nitrogen — no QC series in the records, so these stay illustrative
+// (modelled) over realistic transformer-oil sample ranges; calibrated vs air.
+const DGA_INERT = [
+  { key: "o2", sop: "O2", analyte: "Oxygen (O₂)",   detector: "TCD", lod: 50,  work: 25000, crmU: 1000, range: "100–50000 µL/L",   cal: [1000, 5000, 10000, 20000, 30000, 50000],    spike: 200 },
+  { key: "n2", sop: "N2", analyte: "Nitrogen (N₂)", detector: "TCD", lod: 100, work: 70000, crmU: 3000, range: "1000–150000 µL/L", cal: [5000, 20000, 50000, 75000, 100000, 150000], spike: 1000 },
+];
+
+const buildDgaInert = (g) => {
+  const { analyte, detector, lod, work, crmU, range, cal, spike, sop } = g;
+  const sym = symOf(analyte);
+  const u = dgaSig(0.2 * work);
+  const sa = dgaSig(0.8 * work);
+  return {
+    id: `ex-dga-${g.key}`,
+    name: `${analyte} in transformer oil — DGA, IEC 60567 (illustrative)`,
+    blurb: `${sym} by DGA (${detector}), calibrated against air: ${cal.length}-point calibration (${range}) and detection limit ~${lod} µL/L, with LOD/LOQ, precision, trueness, recovery, ruggedness and a lab comparison. Illustrative data — replace with your ${sym} QC when available.`,
+    study: buildExample(
+      {
+        title: `Determination of dissolved ${analyte} in insulating oil by DGA (vacuum extraction–GC)`,
+        id: `SOP-DGA-${sop}-001`, standard: "IEC 60567; interpretation IEC 60599",
+        analyte, matrix: DGA_MATRIX,
+        technique: `Vacuum (Toepler) extraction + gas chromatography (${detector}); GC HP4 / 8890`,
+        unit: "µL/L", range, type: "validation", reviewer: "QA Manager",
+        requirement: `LOD ≈ ${lod} µL/L; RSD ≤ 5 % at the working level; recovery 90–110 %`,
+        intendedUse: `Quantify dissolved ${sym} (atmospheric-gas indicator) as part of the 9-gas DGA panel for transformer condition assessment per IEC 60599.`,
       },
       {
         linearity: { points: cal.map((c) => ({ conc: c, reps: dgaSeries(c, [0.002, -0.001, 0.0]) })) },
@@ -1192,12 +1309,12 @@ const buildDgaExample = (g) => {
             dgaSeries(work * (1 + gc), [0.001, -0.002, 0.0015])),
         },
         trueness: {
-          mode: "crm", crmRef, crmU,
-          crmReps: dgaSeries(crmRef, [-0.01, 0.008, 0.015, -0.012, 0.01, -0.015, 0.0, -0.008, 0.012, 0.005]),
+          mode: "crm", crmRef: work, crmU,
+          crmReps: dgaSeries(work, [-0.01, 0.008, 0.015, -0.012, 0.01, -0.015, 0.0, -0.008, 0.012, 0.005]),
           spikeMethod: "apha", spikeAmount: sa,
           unspiked: dgaSeries(u, [0.01, -0.02, 0.03, -0.01, 0.0]),
           spiked: dgaSeries(u + sa, [0.005, -0.008, 0.01, -0.004, 0.002]),
-          vSpl: 100, vSpk: 1, cSpk: dgaSig(sa * 101),
+          vSpl: 80, vSpk: 1, cSpk: dgaSig(sa * 81),
         },
         recovery: {
           levels: [dgaSig(0.3 * work), work, dgaSig(2 * work)].map((c) => ({
@@ -1205,12 +1322,12 @@ const buildDgaExample = (g) => {
           })),
         },
         robustness: { factors: [
-          { name: "Equilibration temperature (°C)", nominal: "70", low: "65", high: "75", resLow: dgaSig(work * 0.997), resHigh: dgaSig(work * 1.004) },
-          { name: "Equilibration time (min)", nominal: "30", low: "25", high: "35", resLow: dgaSig(work * 1.003), resHigh: dgaSig(work * 0.998) },
+          { name: "Extraction vacuum time (min)", nominal: "3", low: "2", high: "4", resLow: dgaSig(work * 0.997), resHigh: dgaSig(work * 1.004) },
+          { name: "Column oven temperature (°C)", nominal: "70", low: "65", high: "75", resLow: dgaSig(work * 1.003), resHigh: dgaSig(work * 0.998) },
           { name: "Carrier gas flow (mL/min)", nominal: "30", low: "27", high: "33", resLow: dgaSig(work * 0.999), resHigh: dgaSig(work * 1.002) },
         ] },
         comparison: {
-          mode: "twoSample", labelA: "Reference laboratory", labelB: "Our laboratory",
+          mode: "twoSample", labelA: "GC HP4 (in-house)", labelB: "Other GC systems (HP1/PE/HP2)",
           dataA: dgaSeries(work, [0.005, -0.004, 0.0, 0.008, -0.006, 0.003]),
           dataB: dgaSeries(work, [0.002, 0.01, -0.005, 0.006, -0.002]),
           refValue: work, srcA: "0", srcB: "1",
@@ -1220,7 +1337,7 @@ const buildDgaExample = (g) => {
   };
 };
 
-const DGA_EXAMPLES = DGA_GASES.map(buildDgaExample);
+const DGA_EXAMPLES = [...DGA_FAULT.map(buildDgaFault), ...DGA_INERT.map(buildDgaInert)];
 
 const EXAMPLES = [
   {
