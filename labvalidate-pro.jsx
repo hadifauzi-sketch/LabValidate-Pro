@@ -1388,6 +1388,79 @@ const buildDgaInert = (g) => {
 
 const DGA_EXAMPLES = [...DGA_FAULT.map(buildDgaFault), ...DGA_INERT.map(buildDgaInert)];
 
+/* ────────────────────────────────────────────────────────────────
+   Kinematic viscosity of lubricating oil by ASTM D445 (glass capillary
+   viscometer). Viscosity ν = C · t uses a certified viscometer constant,
+   so there is no calibration curve, detection limit or spike/recovery —
+   the meaningful checks are trueness vs a certified viscosity standard
+   and precision. Those modules are therefore left blank on purpose.
+   ──────────────────────────────────────────────────────────────── */
+const VISC_TESTS = [
+  {
+    key: "40", temp: "40", crmName: "S200", crmRef: 179.8, dp: 2, tubes: ["200", "150", "350"],
+    range: "20–300 mm²/s (tube-dependent)",
+    crmReps: [179.9, 179.6, 180.1, 179.7, 180.0, 179.5, 179.8, 180.2, 179.6, 179.9],
+    precGroups: [[179.9, 180.1], [179.7, 179.5], [180.0, 179.8], [179.6, 180.0], [179.8, 179.9], [180.1, 179.7], [179.5, 179.8], [179.9, 180.0]],
+    bathRes: [179.87, 179.73],
+    dataA: [179.9, 179.7, 180.0, 179.8, 180.1, 179.6], dataB: [179.8, 180.0, 179.7, 179.9, 180.2],
+  },
+  {
+    key: "100", temp: "100", crmName: "N35", crmRef: 5.615, dp: 3, tubes: ["100", "75", "150"],
+    range: "3–10 mm²/s (tube-dependent)",
+    crmReps: [5.618, 5.610, 5.620, 5.612, 5.616, 5.608, 5.617, 5.622, 5.611, 5.614],
+    precGroups: [[5.618, 5.612], [5.610, 5.620], [5.616, 5.608], [5.614, 5.622], [5.611, 5.617], [5.619, 5.613], [5.609, 5.615], [5.617, 5.612]],
+    bathRes: [5.619, 5.611],
+    dataA: [5.618, 5.610, 5.620, 5.614, 5.617, 5.612], dataB: [5.616, 5.611, 5.619, 5.613, 5.622],
+  },
+];
+
+const buildViscExample = (t) => {
+  const r = (x) => +x.toFixed(t.dp);
+  const crmU = r(t.crmRef * 0.05);                    // CRM tolerance ±5 % (as stated)
+  const lo = (Number(t.temp) - 0.02).toFixed(2), hi = (Number(t.temp) + 0.02).toFixed(2);
+  return {
+    id: `ex-visc-d445-${t.key}`,
+    name: `Kinematic viscosity at ${t.temp} °C — ASTM D445 (CRM ${t.crmName})`,
+    blurb: `Verification of kinematic viscosity by calibrated glass capillary viscometer: trueness vs the ${t.crmName} standard (${t.crmRef} mm²/s ± 5 %), day-to-day precision, bath-temperature ruggedness, and a two-tube comparison. No calibration curve, LOD or recovery — the viscometer constant is certified, so those modules are left blank.`,
+    study: buildExample(
+      {
+        title: `Determination of kinematic viscosity of lubricating oil at ${t.temp} °C by glass capillary viscometer`,
+        id: `SOP-KV-D445-${t.key}`, standard: "ASTM D445-24; viscometer calibration ASTM D446",
+        analyte: `Kinematic viscosity (${t.temp} °C)`, matrix: "Lubricating oil (petroleum-based)",
+        technique: "Manual glass capillary viscometer (kinematic viscosity)", unit: "mm²/s",
+        range: t.range, type: "verification", reviewer: "QA Manager",
+        requirement: `Measured within ±5 % of the certified value (${t.crmName} = ${t.crmRef} mm²/s); repeatability within the ASTM D445 limit.`,
+        intendedUse: `Verify the ${t.temp} °C kinematic-viscosity procedure against a certified viscosity reference standard for lubricant grade confirmation and condition monitoring.`,
+      },
+      {
+        // Calibrated capillary viscometer (ν = C · t): no calibration curve, LOD or spiking
+        linearity: { points: [{ conc: "", reps: ["", "", ""] }] },
+        lodloq: {
+          approach: "blank", blankType: "reagent", blankCorrected: true, n: 1, nb: 10, reps: [],
+          slopeFromCal: true, manualSlope: "", idlK: 3, spikeLevel: "", idlReps: [], mdlSpiked: [], mdlBlank: [],
+        },
+        precision: { label: "Day", massFraction: "", sRMeasured: "", groups: t.precGroups },
+        trueness: {
+          mode: "crm", crmRef: t.crmRef, crmU, crmReps: t.crmReps,
+          spikeMethod: "apha", spikeAmount: "", unspiked: [], spiked: [], vSpl: "", vSpk: "", cSpk: "",
+        },
+        recovery: { levels: [{ conc: "", reps: ["", "", "", "", ""] }] },
+        robustness: { factors: [
+          { name: "Bath temperature (°C)", nominal: `${t.temp}.00`, low: lo, high: hi, resLow: t.bathRes[0], resHigh: t.bathRes[1] },
+          { name: "Sample equilibration time (min)", nominal: "30", low: "20", high: "40", resLow: r(t.crmRef * 1.0004), resHigh: r(t.crmRef * 0.9996) },
+          { name: "Viscometer tube size", nominal: t.tubes[0], low: t.tubes[1], high: t.tubes[2], resLow: r(t.crmRef * 1.0002), resHigh: r(t.crmRef * 0.9997) },
+        ] },
+        comparison: {
+          mode: "twoSample", labelA: "Viscometer tube A", labelB: "Viscometer tube B",
+          dataA: t.dataA, dataB: t.dataB, refValue: t.crmRef, srcA: "0", srcB: "1",
+        },
+      },
+    ),
+  };
+};
+
+const VISC_EXAMPLES = VISC_TESTS.map(buildViscExample);
+
 const EXAMPLES = [
   {
     id: "ex-cu-gfaas",
@@ -1473,6 +1546,7 @@ const EXAMPLES = [
     ),
   },
   ...DGA_EXAMPLES,
+  ...VISC_EXAMPLES,
   {
     id: "ex-pb-icpms",
     name: "Lead in drinking water — ICP-MS (method verification)",
