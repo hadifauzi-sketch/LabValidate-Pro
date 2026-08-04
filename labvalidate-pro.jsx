@@ -4464,10 +4464,10 @@ export default function LabValidatePro() {
               <Button variant="ghost" size="sm" className="h-8 w-8 p-0" onClick={() => setPresetsOpen(false)}><X className="h-4 w-4" /></Button>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-4 space-y-4">
+            <div className="flex min-h-0 flex-1 flex-col space-y-4 overflow-hidden p-4">
               {user ? (
                 /* Signed in — studies save to the account (Turso). */
-                <div className="rounded-lg border border-primary/30 bg-primary/5 p-3 flex items-center gap-2">
+                <div className="shrink-0 rounded-lg border border-primary/30 bg-primary/5 p-3 flex items-center gap-2">
                   <Cloud className="h-4 w-4 text-primary shrink-0" />
                   <div className="text-[12px] text-muted-foreground">
                     Saving to your account (<span className="font-data">{user.email}</span>) — synced across your devices.
@@ -4475,7 +4475,7 @@ export default function LabValidatePro() {
                 </div>
               ) : (
                 /* Guest — storage folder / localStorage. */
-                <div className="rounded-lg border border-border p-3 space-y-2">
+                <div className="shrink-0 rounded-lg border border-border p-3 space-y-2">
                   <div className="flex items-center justify-between gap-2">
                     <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Storage folder</div>
                     {folderName && (
@@ -4512,7 +4512,7 @@ export default function LabValidatePro() {
               )}
 
               {/* Save current */}
-              <div className="rounded-lg border border-border p-3 space-y-2">
+              <div className="shrink-0 rounded-lg border border-border p-3 space-y-2">
                 <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Save current study</div>
                 <div className="flex gap-2">
                   <Input value={presetName} onChange={(e) => setPresetName(e.target.value)}
@@ -4521,10 +4521,10 @@ export default function LabValidatePro() {
                 </div>
               </div>
 
-              {/* Examples */}
-              <div className="space-y-2">
-                <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Examples — load a worked study</div>
-                <div className="space-y-1.5">
+              {/* Examples — the one scrollable region; the rest of the modal stays fixed */}
+              <div className="flex min-h-0 flex-1 flex-col space-y-2">
+                <div className="shrink-0 text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Examples — load a worked study</div>
+                <div className="min-h-0 flex-1 overflow-y-auto space-y-1.5 pr-1">
                   {EXAMPLES.map((ex) => (
                     <div key={ex.id} className="flex items-center gap-2 rounded-lg border border-border px-3 py-2 hover:bg-muted/40">
                       <div className="min-w-0 flex-1">
@@ -4540,7 +4540,7 @@ export default function LabValidatePro() {
               </div>
 
               {/* Saved list */}
-              <div className="space-y-2">
+              <div className="shrink-0 space-y-2">
                 <div className="flex items-center justify-between gap-2">
                   <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Open a saved study ({presets.length})</div>
                   <div className="flex items-center gap-1">
@@ -4558,7 +4558,7 @@ export default function LabValidatePro() {
                     No saved studies yet. Name and save the current one above.
                   </div>
                 ) : (
-                  <div className="space-y-1.5">
+                  <div className="max-h-[28vh] overflow-y-auto space-y-1.5 pr-1">
                     {presets.map((e) => (
                       <div key={e.id} className="flex items-center gap-2 rounded-lg border border-border px-3 py-2 hover:bg-muted/40">
                         <div className="min-w-0 flex-1">
