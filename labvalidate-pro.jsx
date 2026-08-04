@@ -4451,12 +4451,12 @@ export default function LabValidatePro() {
 
       {/* Presets modal — save the current study and re-open saved ones */}
       {presetsOpen && (
-        <div className="lvp-no-print fixed inset-0 z-50 flex items-start justify-center p-4 sm:p-6 overflow-y-auto"
+        <div className="lvp-no-print fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6"
           onClick={() => setPresetsOpen(false)}>
           <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" />
-          <div className="relative w-full max-w-lg mt-[8vh] rounded-xl border border-border bg-card shadow-xl"
+          <div className="relative flex max-h-[85vh] w-full max-w-lg flex-col overflow-hidden rounded-xl border border-border bg-card shadow-xl"
             onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between border-b border-border px-4 py-3">
+            <div className="flex shrink-0 items-center justify-between border-b border-border px-4 py-3">
               <div className="flex items-center gap-2">
                 <Library className="h-4 w-4 text-primary" />
                 <div className="text-sm font-semibold">Presets — saved studies</div>
@@ -4464,7 +4464,7 @@ export default function LabValidatePro() {
               <Button variant="ghost" size="sm" className="h-8 w-8 p-0" onClick={() => setPresetsOpen(false)}><X className="h-4 w-4" /></Button>
             </div>
 
-            <div className="p-4 space-y-4">
+            <div className="flex-1 overflow-y-auto p-4 space-y-4">
               {user ? (
                 /* Signed in — studies save to the account (Turso). */
                 <div className="rounded-lg border border-primary/30 bg-primary/5 p-3 flex items-center gap-2">
@@ -4558,7 +4558,7 @@ export default function LabValidatePro() {
                     No saved studies yet. Name and save the current one above.
                   </div>
                 ) : (
-                  <div className="max-h-[46vh] overflow-y-auto space-y-1.5 pr-0.5">
+                  <div className="space-y-1.5">
                     {presets.map((e) => (
                       <div key={e.id} className="flex items-center gap-2 rounded-lg border border-border px-3 py-2 hover:bg-muted/40">
                         <div className="min-w-0 flex-1">
