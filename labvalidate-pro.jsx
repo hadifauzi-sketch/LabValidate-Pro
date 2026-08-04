@@ -1150,6 +1150,66 @@ const EXAMPLES = [
     ),
   },
   {
+    id: "ex-h2o-kf",
+    name: "Water in insulating oil — Karl Fischer, IEC 60814 (full validation)",
+    blurb: "Complete validation of coulometric Karl Fischer titration: linearity, LOD/LOQ, ANOVA precision, trueness vs a 18 ± 2 ppm water CRM, recovery, ruggedness, and an F/t comparison vs the reference laboratory.",
+    study: buildExample(
+      {
+        title: "Determination of water content in insulating oil by coulometric Karl Fischer titration",
+        id: "SOP-KF-H2O-001", standard: "IEC 60814:1997",
+        analyte: "Water content (H₂O)", matrix: "Petroleum-origin electrical insulating oil",
+        technique: "Coulometric Karl Fischer titration", unit: "mg/kg", range: "5–50 mg/kg",
+        type: "validation", reviewer: "QA Manager",
+        requirement: "LOQ ≤ 5 mg/kg; RSD ≤ 5 %; bias within ±10 % of CRM; recovery 90–110 %",
+        intendedUse: "Monitor water content in new and in-service insulating oil to assess insulation condition and dielectric integrity.",
+      },
+      {
+        linearity: { points: [
+          { conc: 5, reps: [5.02, 4.98, 5.01] },
+          { conc: 10, reps: [10.03, 9.98, 10.00] },
+          { conc: 18, reps: [18.05, 17.96, 18.00] },
+          { conc: 25, reps: [25.02, 24.97, 25.01] },
+          { conc: 35, reps: [35.04, 34.95, 35.00] },
+          { conc: 50, reps: [50.06, 49.92, 50.00] },
+        ] },
+        lodloq: {
+          approach: "blank", blankType: "reagent", blankCorrected: true, n: 1, nb: 10,
+          reps: [1.2, 0.9, 1.5, 1.1, 1.0, 1.4, 1.3, 0.8, 1.2, 1.1],
+          slopeFromCal: true, manualSlope: "", idlK: 3, spikeLevel: 5,
+          idlReps: [0.42, 0.51, 0.38, 0.47, 0.44, 0.55, 0.40], mdlSpiked: [4.9, 5.1, 4.8, 5.05, 4.95, 5.12, 4.88], mdlBlank: [],
+        },
+        precision: {
+          label: "Day", massFraction: 1.8e-5, sRMeasured: "",
+          groups: [
+            [18.1, 17.9, 18.0], [18.2, 18.0, 17.9], [17.9, 18.1, 18.0], [18.0, 17.8, 18.2],
+            [18.1, 18.0, 17.9], [17.8, 18.1, 18.0], [18.0, 18.2, 17.9], [18.1, 17.9, 18.1],
+          ],
+        },
+        trueness: {
+          mode: "crm", crmRef: 18, crmU: 2,
+          crmReps: [17.9, 18.1, 18.3, 17.8, 18.2, 17.7, 18.0, 17.9, 18.2, 18.0],
+          spikeMethod: "apha", spikeAmount: 15, unspiked: [3.0, 3.1, 2.9, 3.05, 2.95], spiked: [18.0, 18.1, 17.9, 18.2, 17.85],
+          vSpl: 100, vSpk: 1, cSpk: 1500,
+        },
+        recovery: { levels: [
+          { conc: 10, reps: [9.6, 9.8, 10.0, 9.7, 10.1] },
+          { conc: 18, reps: [17.7, 18.1, 17.9, 18.2, 17.6] },
+          { conc: 35, reps: [34.4, 34.9, 35.2, 34.6, 35.0] },
+        ] },
+        robustness: { factors: [
+          { name: "Cell temperature (°C)", nominal: "23", low: "18", high: "28", resLow: 17.9, resHigh: 18.1 },
+          { name: "Stirring rate (rpm)", nominal: "300", low: "250", high: "350", resLow: 18.05, resHigh: 17.95 },
+          { name: "Sample size (g)", nominal: "5", low: "3", high: "7", resLow: 18.00, resHigh: 18.08 },
+        ] },
+        comparison: {
+          mode: "twoSample", labelA: "Reference laboratory", labelB: "Our laboratory",
+          dataA: [18.1, 17.9, 18.0, 18.2, 17.8, 18.0], dataB: [18.0, 18.2, 17.9, 18.1, 17.85],
+          refValue: 18, srcA: "0", srcB: "1",
+        },
+      },
+    ),
+  },
+  {
     id: "ex-pb-icpms",
     name: "Lead in drinking water — ICP-MS (method verification)",
     blurb: "Verification of a standard method: confirms the lab meets published precision, bias (vs CRM) and recovery, then compares results with the reference laboratory.",
