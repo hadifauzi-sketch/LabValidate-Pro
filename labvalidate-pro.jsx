@@ -1461,6 +1461,88 @@ const buildViscExample = (t) => {
 
 const VISC_EXAMPLES = VISC_TESTS.map(buildViscExample);
 
+/* ────────────────────────────────────────────────────────────────
+   Furanic compounds in insulating oil by HPLC (IEC 61198) — the five
+   furans of the panel, each a full worked study with its own calibration
+   and detection limit. Furans are extracted from the oil (liquid–liquid,
+   Method A) and quantified by HPLC-UV at ~277 nm; 2-FAL is the dominant
+   marker of cellulosic-paper ageing. One study is generated per furan.
+   ──────────────────────────────────────────────────────────────── */
+const FURAN_MATRIX = "Mineral insulating oil (transformer oil)";
+const FURANS = [
+  { key: "2fal", sop: "2FAL", analyte: "2-Furfural (2-FAL)",                  work: 1.0, lod: 0.01, cal: [0.05, 0.1, 0.5, 1, 2, 5],       rf: 10300 },
+  { key: "5hmf", sop: "5HMF", analyte: "5-Hydroxymethyl-2-furfural (5-HMF)",  work: 0.5, lod: 0.02, cal: [0.02, 0.1, 0.25, 0.5, 1, 2],    rf: 9600 },
+  { key: "2fol", sop: "2FOL", analyte: "2-Furfuryl alcohol (2-FOL)",          work: 0.3, lod: 0.02, cal: [0.02, 0.1, 0.25, 0.5, 1, 2],    rf: 8800 },
+  { key: "2acf", sop: "2ACF", analyte: "2-Acetylfuran (2-ACF)",               work: 0.2, lod: 0.01, cal: [0.01, 0.05, 0.1, 0.25, 0.5, 1], rf: 11200 },
+  { key: "5mef", sop: "5MEF", analyte: "5-Methyl-2-furfural (5-MEF)",         work: 0.2, lod: 0.01, cal: [0.01, 0.05, 0.1, 0.25, 0.5, 1], rf: 11800 },
+];
+
+const buildFuranExample = (f) => {
+  const { analyte, sop, work, lod, cal, rf } = f;
+  const sym = symOf(analyte);
+  const top = cal[cal.length - 1];
+  const loq = dgaSig(lod * 3.3, 2);
+  const u = dgaSig(0.2 * work, 3), sa = dgaSig(0.8 * work, 3);
+  return {
+    id: `ex-fur-${f.key}`,
+    name: `${analyte} in insulating oil — HPLC, IEC 61198 (full validation)`,
+    blurb: `HPLC-UV (277 nm) determination of ${sym} after liquid–liquid extraction: 6-point calibration (${cal[0]}–${top} mg/kg), LOD ≈ ${lod} mg/kg, ANOVA precision, trueness vs a gravimetric standard, recovery, ruggedness and an LLE-vs-SPE comparison. One of the five IEC 61198 furanic markers of paper ageing.`,
+    study: buildExample(
+      {
+        title: `Determination of ${analyte} in insulating oil by HPLC`,
+        id: `SOP-FUR-${sop}-001`, standard: "IEC 61198:1993",
+        analyte, matrix: FURAN_MATRIX,
+        technique: "HPLC–UV (277 nm); liquid–liquid extraction (Method A)", unit: "mg/kg", range: `${lod}–${top} mg/kg`,
+        type: "validation", reviewer: "QA Manager",
+        requirement: `LOQ ≤ ${loq} mg/kg; R² ≥ 0.995; RSD ≤ 10 % at the working level; recovery 80–110 %`,
+        intendedUse: `Quantify ${sym} as one of the five IEC 61198 furanic markers (2-FAL, 5-HMF, 2-FOL, 2-ACF, 5-MEF) of cellulosic-paper ageing in oil-filled equipment.`,
+      },
+      {
+        // Peak area ≈ response factor × concentration (HPLC-UV calibration)
+        linearity: { points: cal.map((c) => ({ conc: c, reps: dgaSeries(c * rf, [0.004, -0.003, 0.001]) })) },
+        lodloq: {
+          approach: "blank", blankType: "reagent", blankCorrected: true, n: 1, nb: 10,
+          reps: blankPat.map((p) => dgaSig(p * lod, 3)),
+          slopeFromCal: true, manualSlope: "", idlK: 3, spikeLevel: dgaSig(3 * lod, 2),
+          idlReps: dgaSeries(lod, [0.1, -0.2, 0.3, 0.0, 0.2, -0.1, 0.15], 3),
+          mdlSpiked: dgaSeries(3 * lod, [0.03, -0.04, 0.02, -0.01, 0.05, -0.03, 0.01], 3), mdlBlank: [],
+        },
+        precision: {
+          label: "Day", massFraction: dgaSig(work * 1e-6, 3), sRMeasured: "",
+          groups: [0.02, -0.015, 0.025, -0.02, 0.01, -0.01, 0.02, -0.018].map((gc) =>
+            dgaSeries(work * (1 + gc), [0.008, -0.012, 0.005], 3)),
+        },
+        trueness: {
+          mode: "crm", crmRef: work, crmU: dgaSig(work * 0.05, 3),
+          crmReps: dgaSeries(work, [-0.01, 0.008, 0.015, -0.012, 0.01, -0.015, 0.0, -0.008, 0.012, 0.005], 3),
+          spikeMethod: "apha", spikeAmount: sa,
+          unspiked: dgaSeries(u, [0.02, -0.03, 0.04, -0.02, 0.0], 3),
+          spiked: dgaSeries(u + sa, [0.005, -0.008, 0.01, -0.004, 0.002], 3),
+          vSpl: 100, vSpk: 1, cSpk: dgaSig(sa * 101, 3),
+        },
+        recovery: {
+          levels: [dgaSig(0.3 * work, 3), work, dgaSig(2 * work, 3)].map((c) => ({
+            conc: c, reps: dgaSeries(c, [-0.02, -0.01, 0.005, -0.015, 0.01], 3),
+          })),
+        },
+        robustness: { factors: [
+          { name: "Mobile phase acetonitrile (%)", nominal: "50", low: "45", high: "55", resLow: dgaSig(work * 1.01, 3), resHigh: dgaSig(work * 0.99, 3) },
+          { name: "Column temperature (°C)", nominal: "30", low: "25", high: "35", resLow: dgaSig(work * 0.995, 3), resHigh: dgaSig(work * 1.004, 3) },
+          { name: "Flow rate (mL/min)", nominal: "1.0", low: "0.9", high: "1.1", resLow: dgaSig(work * 1.003, 3), resHigh: dgaSig(work * 0.998, 3) },
+        ] },
+        comparison: {
+          mode: "twoSample", labelA: "LLE extraction (Method A)", labelB: "SPE cartridge (Method B)",
+          dataA: dgaSeries(work, [0.02, -0.01, 0.01, 0.0, 0.03, -0.02], 3),
+          dataB: dgaSeries(work, [0.0, 0.02, -0.01, 0.01, -0.03], 3),
+          refValue: work, srcA: "0", srcB: "1",
+        },
+      },
+    ),
+  };
+};
+
+const FURAN_EXAMPLES = FURANS.map(buildFuranExample);
+
 const EXAMPLES = [
   {
     id: "ex-cu-gfaas",
@@ -1547,6 +1629,7 @@ const EXAMPLES = [
   },
   ...DGA_EXAMPLES,
   ...VISC_EXAMPLES,
+  ...FURAN_EXAMPLES,
   {
     id: "ex-fur-hplc",
     name: "Furanic compounds (2-FAL) in insulating oil — HPLC, IEC 61198 (full validation)",
