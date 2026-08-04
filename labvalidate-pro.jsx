@@ -1125,6 +1125,103 @@ const buildExample = (info, mods) => {
   return { ...s, ...mods };
 };
 
+/* ────────────────────────────────────────────────────────────────
+   DGA (IEC 60567) — the nine dissolved gases, each a full worked study
+   with its OWN calibration curve and detection limit. Gases are freed
+   from the oil by headspace extraction and quantified by GC: a TCD for
+   the fixed gases (H₂, O₂, N₂), an FID for the hydrocarbons, and an FID
+   preceded by a methaniser for the carbon oxides. Results are volume
+   ratios (µL/L, i.e. ppm v/v). One study is generated per gas from the
+   table below so each keeps its own calibration, LOD/LOQ and criteria.
+   ──────────────────────────────────────────────────────────────── */
+const DGA_MATRIX = "Mineral insulating oil (transformer oil)";
+// round to n significant figures so the synthetic data reads sensibly
+// across gases spanning µL/L (acetylene) to tens of thousands (nitrogen)
+const dgaSig = (x, n = 4) => {
+  if (!x) return 0;
+  const f = Math.pow(10, n - Math.ceil(Math.log10(Math.abs(x))));
+  return Math.round(x * f) / f;
+};
+const dgaSeries = (center, offsets, n = 4) => offsets.map((o) => dgaSig(center * (1 + o), n));
+
+const DGA_GASES = [
+  { key: "h2",   sop: "H2",   analyte: "Hydrogen (H₂)",        detector: "TCD",              lod: 2,   work: 100,   crmRef: 100,   crmU: 5,    range: "5–500 µL/L",       cal: [5, 25, 50, 100, 250, 500],                 spike: 5 },
+  { key: "ch4",  sop: "CH4",  analyte: "Methane (CH₄)",        detector: "FID",              lod: 1,   work: 60,    crmRef: 60,    crmU: 3,    range: "1–500 µL/L",       cal: [2, 10, 50, 100, 250, 500],                 spike: 2 },
+  { key: "c2h6", sop: "C2H6", analyte: "Ethane (C₂H₆)",        detector: "FID",              lod: 1,   work: 50,    crmRef: 50,    crmU: 3,    range: "1–500 µL/L",       cal: [2, 10, 50, 100, 250, 500],                 spike: 2 },
+  { key: "c2h4", sop: "C2H4", analyte: "Ethylene (C₂H₄)",      detector: "FID",              lod: 1,   work: 50,    crmRef: 50,    crmU: 3,    range: "1–500 µL/L",       cal: [2, 10, 50, 100, 250, 500],                 spike: 2 },
+  { key: "c2h2", sop: "C2H2", analyte: "Acetylene (C₂H₂)",     detector: "FID",              lod: 0.5, work: 10,    crmRef: 10,    crmU: 1,    range: "0.5–100 µL/L",     cal: [1, 5, 10, 25, 50, 100],                    spike: 1 },
+  { key: "co",   sop: "CO",   analyte: "Carbon monoxide (CO)", detector: "methaniser + FID", lod: 2,   work: 300,   crmRef: 300,   crmU: 15,   range: "5–2000 µL/L",      cal: [10, 50, 100, 500, 1000, 2000],             spike: 10 },
+  { key: "co2",  sop: "CO2",  analyte: "Carbon dioxide (CO₂)", detector: "methaniser + FID", lod: 5,   work: 2000,  crmRef: 2000,  crmU: 100,  range: "20–5000 µL/L",     cal: [50, 200, 1000, 2000, 3500, 5000],          spike: 50 },
+  { key: "o2",   sop: "O2",   analyte: "Oxygen (O₂)",          detector: "TCD",              lod: 50,  work: 8000,  crmRef: 8000,  crmU: 400,  range: "100–50000 µL/L",   cal: [500, 2000, 5000, 10000, 25000, 50000],     spike: 500 },
+  { key: "n2",   sop: "N2",   analyte: "Nitrogen (N₂)",        detector: "TCD",              lod: 100, work: 45000, crmRef: 45000, crmU: 2000, range: "1000–100000 µL/L", cal: [2000, 10000, 25000, 50000, 75000, 100000], spike: 2000 },
+];
+
+const buildDgaExample = (g) => {
+  const { analyte, detector, lod, work, crmRef, crmU, range, cal, spike, sop } = g;
+  const sym = analyte.slice(analyte.indexOf("(") + 1, analyte.indexOf(")")); // e.g. "C₂H₂"
+  const u = dgaSig(0.2 * work);   // background (unspiked) level
+  const sa = dgaSig(0.8 * work);  // spike addition, so recovered ≈ 100 %
+  // blank noise for the LOD/LOQ (blank) approach — spread chosen so 3·SD ≈ LOD
+  const blankPat = [0.20, 0.55, 0.85, 0.35, 0.65, 0.15, 0.75, 0.45, 0.90, 0.25];
+  return {
+    id: `ex-dga-${g.key}`,
+    name: `${analyte} in transformer oil — DGA, IEC 60567 (full validation)`,
+    blurb: `Dissolved gas analysis for ${sym} by headspace extraction + GC (${detector}): its own calibration (${range}) and detection limit (~${lod} µL/L), with LOD/LOQ, ANOVA precision, trueness vs a gas-in-oil standard, recovery, ruggedness and an F/t comparison vs the reference laboratory.`,
+    study: buildExample(
+      {
+        title: `Determination of dissolved ${analyte} in insulating oil by DGA (headspace–GC)`,
+        id: `SOP-DGA-${sop}-001`, standard: "IEC 60567:2011; interpretation IEC 60599",
+        analyte, matrix: DGA_MATRIX,
+        technique: `Gas extraction (headspace) + gas chromatography (${detector})`,
+        unit: "µL/L", range, type: "validation", reviewer: "QA Manager",
+        requirement: `LOD ≈ ${lod} µL/L; RSD ≤ 10 % at the working level; recovery 90–110 %; bias within CRM uncertainty`,
+        intendedUse: `Quantify dissolved ${sym} as part of the 9-gas DGA panel (H₂, CH₄, C₂H₆, C₂H₄, C₂H₂, CO, CO₂, O₂, N₂) for transformer fault diagnosis per IEC 60599.`,
+      },
+      {
+        linearity: { points: cal.map((c) => ({ conc: c, reps: dgaSeries(c, [0.002, -0.001, 0.0]) })) },
+        lodloq: {
+          approach: "blank", blankType: "reagent", blankCorrected: true, n: 1, nb: 10,
+          reps: blankPat.map((p) => dgaSig(p * lod)),
+          slopeFromCal: true, manualSlope: "", idlK: 3, spikeLevel: spike,
+          idlReps: dgaSeries(lod, [0.1, -0.2, 0.3, 0.0, 0.2, -0.1, 0.15]),
+          mdlSpiked: dgaSeries(spike, [0.03, -0.04, 0.02, -0.01, 0.05, -0.03, 0.01]), mdlBlank: [],
+        },
+        precision: {
+          label: "Day", massFraction: dgaSig(work * 1e-6, 3), sRMeasured: "",
+          groups: [0.004, -0.003, 0.006, -0.005, 0.002, -0.002, 0.005, -0.004].map((gc) =>
+            dgaSeries(work * (1 + gc), [0.001, -0.002, 0.0015])),
+        },
+        trueness: {
+          mode: "crm", crmRef, crmU,
+          crmReps: dgaSeries(crmRef, [-0.01, 0.008, 0.015, -0.012, 0.01, -0.015, 0.0, -0.008, 0.012, 0.005]),
+          spikeMethod: "apha", spikeAmount: sa,
+          unspiked: dgaSeries(u, [0.01, -0.02, 0.03, -0.01, 0.0]),
+          spiked: dgaSeries(u + sa, [0.005, -0.008, 0.01, -0.004, 0.002]),
+          vSpl: 100, vSpk: 1, cSpk: dgaSig(sa * 101),
+        },
+        recovery: {
+          levels: [dgaSig(0.3 * work), work, dgaSig(2 * work)].map((c) => ({
+            conc: c, reps: dgaSeries(c, [-0.02, -0.01, 0.005, -0.015, 0.01]),
+          })),
+        },
+        robustness: { factors: [
+          { name: "Equilibration temperature (°C)", nominal: "70", low: "65", high: "75", resLow: dgaSig(work * 0.997), resHigh: dgaSig(work * 1.004) },
+          { name: "Equilibration time (min)", nominal: "30", low: "25", high: "35", resLow: dgaSig(work * 1.003), resHigh: dgaSig(work * 0.998) },
+          { name: "Carrier gas flow (mL/min)", nominal: "30", low: "27", high: "33", resLow: dgaSig(work * 0.999), resHigh: dgaSig(work * 1.002) },
+        ] },
+        comparison: {
+          mode: "twoSample", labelA: "Reference laboratory", labelB: "Our laboratory",
+          dataA: dgaSeries(work, [0.005, -0.004, 0.0, 0.008, -0.006, 0.003]),
+          dataB: dgaSeries(work, [0.002, 0.01, -0.005, 0.006, -0.002]),
+          refValue: work, srcA: "0", srcB: "1",
+        },
+      },
+    ),
+  };
+};
+
+const DGA_EXAMPLES = DGA_GASES.map(buildDgaExample);
+
 const EXAMPLES = [
   {
     id: "ex-cu-gfaas",
@@ -1209,6 +1306,7 @@ const EXAMPLES = [
       },
     ),
   },
+  ...DGA_EXAMPLES,
   {
     id: "ex-pb-icpms",
     name: "Lead in drinking water — ICP-MS (method verification)",
