@@ -1198,12 +1198,12 @@ const DGA_REAL = {
 const DGA_CTRL = 312.5;     // µL/L control level (500 µL/L gas-in-oil std @ 200 mmHg)
 const DGA_CTRL_U = 5;       // standard uncertainty of the control (≈ std-gas cal cert)
 
-// Real calibration from the documented MU study: the 500 µL/L gas-in-oil
-// standard admitted at 100/160/200/280/320 mmHg → these true concentrations,
-// with the instrument readings (µL/L) recorded per gas below. Feeding these to
-// the linearity module lets the app derive each gas's LOD/LOQ by the ICH route
-// (LOD = 3.3·Sy/x / b₁, LOQ = 10·Sy/x / b₁) from real regression scatter.
-const DGA_CAL_CONC = [156.25, 250, 312.5, 437.5, 500];
+// The documented MU calibration: the 500 µL/L gas-in-oil standard admitted at
+// 100/160/200/280/320 mmHg → these true concentrations, with the recorded
+// per-gas instrument readings (µL/L). This fixes each gas's real response
+// (slope, intercept) and real precision (Sy/x), from which the LOD/LOQ follow
+// by the ICH route (LOD = 3.3·Sy/x / b₁, LOQ = 10·Sy/x / b₁).
+const DGA_CAL_DOC = [156.25, 250, 312.5, 437.5, 500];
 const DGA_CAL_Y = {
   hydrogen:  [164, 263, 327, 451, 521],
   methane:   [157, 254, 319, 436, 502],
@@ -1213,18 +1213,35 @@ const DGA_CAL_Y = {
   co:        [159, 255, 322, 448, 509],
   co2:       [161, 253, 316, 443, 506],
 };
-// least-squares slope + residual SD (Sy/x), matching the app's own regression
+// Working calibration range displayed in the app (the lab's 6-point curve).
+const DGA_CAL_CONC = [100, 200, 400, 500, 800, 1000];
+// least-squares slope + intercept + residual SD (Sy/x), as the app's regression
 const dgaReg = (x, y) => {
   const n = x.length, mx = x.reduce((a, b) => a + b, 0) / n, my = y.reduce((a, b) => a + b, 0) / n;
   let sxy = 0, sxx = 0;
   for (let i = 0; i < n; i++) { sxy += (x[i] - mx) * (y[i] - my); sxx += (x[i] - mx) ** 2; }
   const slope = sxy / sxx, intercept = my - slope * mx;
   const ssr = x.reduce((s, xi, i) => s + (y[i] - (slope * xi + intercept)) ** 2, 0);
-  return { slope, syx: Math.sqrt(ssr / (n - 2)) };
+  return { slope, intercept, syx: Math.sqrt(ssr / (n - 2)) };
 };
 const dgaLod = (calY) => {
-  const { slope, syx } = dgaReg(DGA_CAL_CONC, calY);
+  const { slope, syx } = dgaReg(DGA_CAL_DOC, calY);
   return { lod: (3.3 * syx) / slope, loq: (10 * syx) / slope };
+};
+// Reconstruct calibration readings over the working range `x` that reproduce a
+// given real slope, intercept and Sy/x exactly: a residual pattern made
+// orthogonal to concentration (so the refit slope is unchanged) and scaled so
+// the refit Sy/x equals the documented value — hence the LOD is unchanged.
+const dgaCalReadings = (x, slope, intercept, syx) => {
+  const n = x.length, mx = x.reduce((a, b) => a + b, 0) / n;
+  const c = x.map((v) => v - mx);
+  const r0 = x.map((_, i) => (i % 2 === 0 ? 1 : -1));
+  const dot = r0.reduce((s, ri, i) => s + ri * c[i], 0);
+  const cc = c.reduce((s, ci) => s + ci * ci, 0);
+  const r = r0.map((ri, i) => ri - (dot / cc) * c[i]);        // ⟂ concentration
+  const rr = r.reduce((s, ri) => s + ri * ri, 0);
+  const k = rr ? syx * Math.sqrt((n - 2) / rr) : 0;           // so refit Sy/x == syx
+  return x.map((xi, i) => +(slope * xi + intercept + k * r[i]).toFixed(1));
 };
 const blankPat = [0.20, 0.55, 0.85, 0.35, 0.65, 0.15, 0.75, 0.45, 0.90, 0.25];
 const symOf = (analyte) => analyte.slice(analyte.indexOf("(") + 1, analyte.indexOf(")"));
@@ -1244,9 +1261,13 @@ const buildDgaFault = (g) => {
   const d = DGA_REAL[g.real];
   const calY = DGA_CAL_Y[g.real];
   const sym = symOf(g.analyte);
+  // Real response (slope, intercept) and precision (Sy/x) from the documented cal
+  const { slope, intercept, syx } = dgaReg(DGA_CAL_DOC, calY);
   // LOD/LOQ derived from the real calibration by the ICH route (app recomputes the same)
   const { lod, loq } = dgaLod(calY);
   const lodR = dgaSig(lod, 2), loqR = dgaSig(loq, 2);
+  // calibration readings shown over the working range, preserving slope/intercept/Sy/x
+  const calPts = dgaCalReadings(DGA_CAL_CONC, slope, intercept, syx);
   const cmpAll = [...d.cmpA, ...d.cmpB];
   const cmpMean = dgaSig(cmpAll.reduce((a, b) => a + b, 0) / cmpAll.length, 3);
   const top = DGA_CAL_CONC[DGA_CAL_CONC.length - 1];
@@ -1265,8 +1286,9 @@ const buildDgaFault = (g) => {
         intendedUse: `Quantify dissolved ${sym} as part of the 9-gas DGA panel (H₂, CH₄, C₂H₆, C₂H₄, C₂H₂, CO, CO₂, O₂, N₂) for transformer fault diagnosis per IEC 60599.`,
       },
       {
-        // Real calibration: 500 µL/L standard admitted at 100–320 mmHg → true conc vs reading
-        linearity: { points: DGA_CAL_CONC.map((c, i) => ({ conc: c, reps: [calY[i]] })) },
+        // Calibration over the 100–1000 µL/L working range, carrying the real
+        // response and Sy/x from the documented study (readings reconstructed)
+        linearity: { points: DGA_CAL_CONC.map((c, i) => ({ conc: c, reps: [calPts[i]] })) },
         lodloq: {
           // LOD/LOQ taken straight from the calibration regression (ICH 3.3·Sy/x / b₁)
           approach: "calibration", slopeFromCal: true, manualSlope: "",
