@@ -6,7 +6,7 @@ import {
   CircleDashed, ChevronRight, ChevronUp, ChevronDown, Info, Calendar as CalendarIcon,
   Library, Save, X, FolderOpen, FilePlus, Search,
   Settings, LogIn, LogOut, LayoutDashboard, Cloud, Loader2, ArrowLeft, UserCircle2,
-  MessageSquare, Clock,
+  MessageSquare, Clock, Calculator,
 } from "lucide-react";
 import { auth, cloud } from "@/lib/apiClient";
 import { AuthDialog } from "@/components/AuthDialog";
@@ -19,11 +19,24 @@ import { WorkspaceDashboard } from "@/components/WorkspaceDashboard";
 // screen a signed-out visitor sees.
 const AccountDialog = lazy(() => import("@/components/AccountDialog").then((m) => ({ default: m.AccountDialog })));
 const AboutDialog = lazy(() => import("@/components/AboutDialog").then((m) => ({ default: m.AboutDialog })));
+const AppVersionDialog = lazy(() => import("@/components/AppVersionDialog").then((m) => ({ default: m.AppVersionDialog })));
 const TutorialDialog = lazy(() => import("@/components/TutorialDialog").then((m) => ({ default: m.TutorialDialog })));
 const FeedbackDialog = lazy(() => import("@/components/FeedbackDialog").then((m) => ({ default: m.FeedbackDialog })));
 const ReportDialog = lazy(() => import("@/components/ReportDialog").then((m) => ({ default: m.ReportDialog })));
 const AdminDialog = lazy(() => import("@/components/AdminDialog").then((m) => ({ default: m.AdminDialog })));
 const PendingGate = lazy(() => import("@/components/PendingGate").then((m) => ({ default: m.PendingGate })));
+// Lazy — the step-by-step "how was this calculated" modal for the result cards.
+// It carries its own explanation engine, so it only loads when a card is clicked.
+const StatCalcDialog = lazy(() => import("@/components/StatCalcDialog").then((m) => ({ default: m.StatCalcDialog })));
+const LinearityCalcDialog = lazy(() => import("@/components/LinearityCalcDialog").then((m) => ({ default: m.LinearityCalcDialog })));
+const PrecisionCalcDialog = lazy(() => import("@/components/PrecisionCalcDialog").then((m) => ({ default: m.PrecisionCalcDialog })));
+const TruenessCalcDialog = lazy(() => import("@/components/TruenessCalcDialog").then((m) => ({ default: m.TruenessCalcDialog })));
+const ComparisonCalcDialog = lazy(() => import("@/components/ComparisonCalcDialog").then((m) => ({ default: m.ComparisonCalcDialog })));
+const UncertaintyCalcDialog = lazy(() => import("@/components/UncertaintyCalcDialog").then((m) => ({ default: m.UncertaintyCalcDialog })));
+const RecoveryCalcDialog = lazy(() => import("@/components/RecoveryCalcDialog").then((m) => ({ default: m.RecoveryCalcDialog })));
+const AnovaCalcDialog = lazy(() => import("@/components/AnovaCalcDialog").then((m) => ({ default: m.AnovaCalcDialog })));
+const RuggednessCalcDialog = lazy(() => import("@/components/RuggednessCalcDialog").then((m) => ({ default: m.RuggednessCalcDialog })));
+const FtSummaryCalcDialog = lazy(() => import("@/components/FtSummaryCalcDialog").then((m) => ({ default: m.FtSummaryCalcDialog })));
 // Lazy — react-pdf is heavy, so it only loads when the Print/PDF dialog is opened.
 const PdfReportDialog = lazy(() => import("@/components/PdfReportDialog").then((m) => ({ default: m.PdfReportDialog })));
 // Lazy — recharts + d3 are the biggest slice of the main bundle, and nothing is
@@ -353,16 +366,25 @@ const Hint = ({ label, side = "bottom", className = "", children }) => (
   </Tooltip>
 );
 
-const Stat = ({ label, value, unit, status }) => (
-  <div className={`rounded-lg border px-3.5 py-2.5 bg-card min-w-[110px] ${
-    status === "pass" ? "border-emerald-600/40" : status === "fail" ? "border-red-600/40" : "border-border"}`}>
-    <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">{label}</div>
-    <div className={`font-data text-base font-semibold mt-0.5 ${
-      status === "pass" ? "text-emerald-600" : status === "fail" ? "text-red-500" : "text-foreground"}`}>
-      {value}{unit && <span className="text-[11px] text-muted-foreground ml-1 font-normal">{unit}</span>}
-    </div>
-  </div>
-);
+const Stat = ({ label, value, unit, status, onClick }) => {
+  // With an onClick the card becomes a button that opens the calculation
+  // walkthrough; without one it stays exactly as it was.
+  const Tag = onClick ? "button" : "div";
+  return (
+    <Tag {...(onClick ? { type: "button", onClick, title: "Show how this is calculated" } : {})}
+      className={`text-left rounded-lg border px-3.5 py-2.5 bg-card min-w-[110px] ${
+        status === "pass" ? "border-emerald-600/40" : status === "fail" ? "border-red-600/40" : "border-border"}${
+        onClick ? " cursor-pointer transition-colors hover:border-primary hover:bg-primary/5" : ""}`}>
+      <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium flex items-center gap-1">
+        {label}{onClick && <Calculator className="h-3 w-3 text-primary/70 shrink-0" />}
+      </div>
+      <div className={`font-data text-base font-semibold mt-0.5 ${
+        status === "pass" ? "text-emerald-600" : status === "fail" ? "text-red-500" : "text-foreground"}`}>
+        {value}{unit && <span className="text-[11px] text-muted-foreground ml-1 font-normal">{unit}</span>}
+      </div>
+    </Tag>
+  );
+};
 
 const FieldLabel = ({ children }) => (
   <Label className="text-[11px] uppercase tracking-wider text-muted-foreground font-medium">{children}</Label>
@@ -475,7 +497,9 @@ const RepGrid = ({ values, onChange, label, outlierIdx = -1 }) => {
   );
 };
 
-const DataTable = ({ headers, rows }) => (
+/** With onRowClick the rows become buttons that open a calculation walkthrough;
+ *  without it the table renders exactly as it always did. */
+const DataTable = ({ headers, rows, onRowClick }) => (
   <div className="overflow-x-auto rounded-lg border border-border">
     <table className="w-full text-[12px] border-collapse">
       <thead>
@@ -487,7 +511,14 @@ const DataTable = ({ headers, rows }) => (
       </thead>
       <tbody>
         {rows.map((r, ri) => (
-          <tr key={ri} className={ri % 2 ? "bg-muted/40" : ""}>
+          <tr key={ri}
+            {...(onRowClick ? {
+              onClick: () => onRowClick(ri),
+              onKeyDown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onRowClick(ri); } },
+              tabIndex: 0, role: "button", title: "Show how this row is calculated",
+            } : {})}
+            className={`${ri % 2 ? "bg-muted/40" : ""}${
+              onRowClick ? " cursor-pointer transition-colors hover:bg-primary/10 focus:bg-primary/10 focus:outline-none" : ""}`}>
             {r.map((c, ci) => <td key={ci} className="px-3 py-1.5 border-b border-border/40 whitespace-nowrap">{c}</td>)}
           </tr>
         ))}
@@ -2091,6 +2122,7 @@ export default function LabValidatePro() {
   const [authOpen, setAuthOpen] = useState(false);
   const [accountOpen, setAccountOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
+  const [versionOpen, setVersionOpen] = useState(false); // version + release history
   const [termsOpen, setTermsOpen] = useState(false);   // read-only view (from About)
   // Terms acceptance gate — persisted per browser; re-prompts when TERMS_VERSION changes.
   const [tosAccepted, setTosAccepted] = useState(() => {
@@ -2105,6 +2137,20 @@ export default function LabValidatePro() {
   const [reportOpen, setReportOpen] = useState(false);
   const [pdfOpen, setPdfOpen] = useState(false);
   const [adminOpen, setAdminOpen] = useState(false);
+  // Which LOD/LOQ result card has its calculation walkthrough open (null = none).
+  // Lives here, not inside the module, because module views are re-created on
+  // every parent render and would otherwise lose the state.
+  const [lodStat, setLodStat] = useState(null);
+  const [linStat, setLinStat] = useState(null);   // same, for the Linearity & Range cards
+  const [precStat, setPrecStat] = useState(null); // same, for the Precision cards
+  const [trueStat, setTrueStat] = useState(null); // same, for the Trueness / Bias cards
+  const [compStat, setCompStat] = useState(null); // same, for the F & t Tests cards
+  const [uncStat, setUncStat] = useState(null);   // same, for the Uncertainty cards
+  // Recovery reports rows rather than cards, so this holds the row index.
+  const [recRow, setRecRow] = useState(null);
+  const [anovaRow, setAnovaRow] = useState(null); // "between" | "within" | null
+  const [robustRow, setRobustRow] = useState(null); // Ruggedness factor row index
+  const [ftRow, setFtRow] = useState(null);         // "F" | "t" | null
   const [requireLogin, setRequireLogin] = useState(false); // beta sign-in wall (from server)
   const [booting, setBooting] = useState(true);            // true until the session check resolves
   const [view, setView] = useState("study");       // "workspace" | "study"
@@ -2721,6 +2767,12 @@ export default function LabValidatePro() {
     const pts = study.linearity.points;
     const setPts = (p) => up("linearity", { points: p });
     const chartData = lin ? lin.rows.map((r) => ({ ...r })) : [];
+    // The same filter `lin` applies, so these levels line up index-for-index
+    // with lin.rows — the calculation walkthrough uses them to show how many
+    // replicates stand behind each plotted mean.
+    const linLevels = study.linearity.points
+      .map((p) => ({ conc: num(p.conc), reps: clean(p.reps) }))
+      .filter((p) => p.conc !== null && p.reps.length > 0);
     // Derived series for the richer chart set (all cheap — recomputed per render).
     let band = [], rfData = [], accData = [], meanRF = 0, rfTol = 0;
     if (lin) {
@@ -2778,12 +2830,12 @@ export default function LabValidatePro() {
         {lin && (
           <>
             <div className="flex flex-wrap gap-2">
-              <Stat label="Slope b₁" value={fmtSig(lin.slope)} status={null} />
-              <Stat label="Intercept b₀" value={fmtSig(lin.intercept)} status={lin.interceptSig ? "fail" : "pass"} />
-              <Stat label="R²" value={fmt(lin.r2, 5)} status={lin.r2 >= cr.r2Min ? "pass" : "fail"} />
-              <Stat label="Sy/x" value={fmtSig(lin.syx)} />
-              <Stat label="Max residual" value={fmt(lin.maxResidPct, 2)} unit="%" status={lin.maxResidPct <= cr.residPctMax ? "pass" : "fail"} />
-              {lin.rfRSD !== null && <Stat label="RF RSD" value={fmt(lin.rfRSD, 2)} unit="%" status={lin.rfRSD <= cr.residPctMax ? "pass" : "warn"} />}
+              <Stat label="Slope b₁" value={fmtSig(lin.slope)} status={null} onClick={() => setLinStat("slope")} />
+              <Stat label="Intercept b₀" value={fmtSig(lin.intercept)} status={lin.interceptSig ? "fail" : "pass"} onClick={() => setLinStat("intercept")} />
+              <Stat label="R²" value={fmt(lin.r2, 5)} status={lin.r2 >= cr.r2Min ? "pass" : "fail"} onClick={() => setLinStat("r2")} />
+              <Stat label="Sy/x" value={fmtSig(lin.syx)} onClick={() => setLinStat("syx")} />
+              <Stat label="Max residual" value={fmt(lin.maxResidPct, 2)} unit="%" status={lin.maxResidPct <= cr.residPctMax ? "pass" : "fail"} onClick={() => setLinStat("maxResid")} />
+              {lin.rfRSD !== null && <Stat label="RF RSD" value={fmt(lin.rfRSD, 2)} unit="%" status={lin.rfRSD <= cr.residPctMax ? "pass" : "warn"} onClick={() => setLinStat("rfRSD")} />}
             </div>
             {lin.interceptSig && (
               <div className="text-[12px] text-amber-600 flex items-center gap-1.5"><AlertTriangle className="h-3.5 w-3.5" />
@@ -2919,12 +2971,31 @@ export default function LabValidatePro() {
             </Card>
           </>
         )}
+        <Suspense fallback={null}>
+          {linStat && (
+            <LinearityCalcDialog open statKey={linStat} onClose={() => setLinStat(null)}
+              lin={lin} unit={unit} levels={linLevels} tCrit={lin ? S.tCrit95(lin.n - 2) : null}
+              limits={{ r2Min: cr.r2Min, residPctMax: cr.residPctMax }} />
+          )}
+        </Suspense>
       </div>
     );
   };
 
   const LodLoqModule = () => {
     const d = study.lodloq;
+    // Raw data + design parameters handed to the calculation walkthrough, so it
+    // can rebuild every figure from the values actually typed in.
+    const calcDesign = {
+      reps: clean(d.reps),
+      nI: Math.max(1, num(d.n) ?? 1),
+      nB: Math.max(1, num(d.nb) ?? clean(d.reps).length),
+      blankCorrected: d.blankCorrected,
+      idlReps: clean(d.idlReps),
+      mdlSpikedReps: clean(d.mdlSpiked),
+      mdlBlankReps: clean(d.mdlBlank),
+      spikeLevel: num(d.spikeLevel),
+    };
     return (
       <div className="space-y-4">
         <GuideNote>
@@ -3011,12 +3082,14 @@ export default function LabValidatePro() {
         {lod && lod.approach === "usepa" && (
           <>
             <div className="flex flex-wrap gap-2">
-              {lod.idl && <Stat label={`IDL (${fmt(lod.idl.k, 0)}·s)`} value={fmtSig(lod.idl.value)} unit={unit} status="pass" />}
+              {lod.idl && <Stat label={`IDL (${fmt(lod.idl.k, 0)}·s)`} value={fmtSig(lod.idl.value)} unit={unit} status="pass"
+                onClick={() => setLodStat("idl")} />}
               {lod.mdlSpiked && <Stat label="MDL spiked (t·s)" value={fmtSig(lod.mdlSpiked.value)} unit={unit}
-                status={lod.governed === "spiked" ? "pass" : undefined} />}
+                status={lod.governed === "spiked" ? "pass" : undefined} onClick={() => setLodStat("mdlSpiked")} />}
               {lod.mdlBlank && <Stat label="MDL blank (x̄+t·s)" value={fmtSig(lod.mdlBlank.value)} unit={unit}
-                status={lod.governed === "blank" ? "pass" : undefined} />}
-              {lod.mdl != null && <Stat label="MDL (reported)" value={fmtSig(lod.mdl)} unit={unit} status="pass" />}
+                status={lod.governed === "blank" ? "pass" : undefined} onClick={() => setLodStat("mdlBlank")} />}
+              {lod.mdl != null && <Stat label="MDL (reported)" value={fmtSig(lod.mdl)} unit={unit} status="pass"
+                onClick={() => setLodStat("mdl")} />}
             </div>
             {lod.spikeRatio != null && (lod.spikeRatio < 1 || lod.spikeRatio > 10) && (
               <div className="text-[12px] text-amber-600 flex items-center gap-1.5"><AlertTriangle className="h-3.5 w-3.5" />
@@ -3046,12 +3119,16 @@ export default function LabValidatePro() {
           <>
             <div className="flex flex-wrap gap-2">
               {lod.approach !== "calibration" && <>
-                <Stat label="Mean blank" value={fmtSig(lod.mean)} unit={unit} />
-                <Stat label="s₀" value={fmtSig(lod.s0)} unit={unit} />
-                <Stat label="s′₀" value={fmtSig(lod.s0p)} unit={unit} />
+                <Stat label="Mean blank" value={fmtSig(lod.mean)} unit={unit} onClick={() => setLodStat("mean")} />
+                <Stat label="s₀" value={fmtSig(lod.s0)} unit={unit} onClick={() => setLodStat("s0")} />
+                <Stat label="s′₀" value={fmtSig(lod.s0p)} unit={unit} onClick={() => setLodStat("s0p")} />
               </>}
-              <Stat label="LOD (3·s′₀)" value={fmtSig(lod.lod)} unit={unit} status="pass" />
-              <Stat label={`LOQ (${cr.kQ}·s′₀)`} value={fmtSig(lod.loq)} unit={unit} status="pass" />
+              {/* The calibration route computes 3.3·Sy/x / b₁, not the replicate-blank
+                  form — each card names the formula that actually produced its value. */}
+              <Stat label={lod.approach === "calibration" ? "LOD (3.3·Sy/x ÷ b₁)" : "LOD (3·s′₀)"}
+                value={fmtSig(lod.lod)} unit={unit} status="pass" onClick={() => setLodStat("lod")} />
+              <Stat label={lod.approach === "calibration" ? `LOQ (${cr.kQ}·Sy/x ÷ b₁)` : `LOQ (${cr.kQ}·s′₀)`}
+                value={fmtSig(lod.loq)} unit={unit} status="pass" onClick={() => setLodStat("loq")} />
             </div>
             <LodDistributionChart lod={lod} kQ={cr.kQ} unit={unit} C={C} />
             {lod.approach === "calibration" ? (
@@ -3088,6 +3165,12 @@ export default function LabValidatePro() {
             </GuideNote>
           </>
         )}
+        <Suspense fallback={null}>
+          {lodStat && (
+            <StatCalcDialog open statKey={lodStat} onClose={() => setLodStat(null)}
+              lod={lod} unit={unit} kQ={cr.kQ} design={calcDesign} />
+          )}
+        </Suspense>
       </div>
     );
   };
@@ -3127,12 +3210,12 @@ export default function LabValidatePro() {
         {prec && (
           <>
             <div className="flex flex-wrap gap-2">
-              <Stat label="Grand mean" value={fmtSig(prec.gm)} unit={unit} />
-              <Stat label="sr (repeatability)" value={fmtSig(prec.sr)} unit={unit} />
-              <Stat label="RSDr" value={fmt(prec.rsdR, 2)} unit="%" status={prec.rsdR <= cr.rsdRMax ? "pass" : "fail"} />
-              <Stat label="sI (intermediate)" value={fmtSig(prec.sI)} unit={unit} />
-              <Stat label="RSDI" value={fmt(prec.rsdI, 2)} unit="%" status={prec.rsdI <= cr.rsdIMax ? "pass" : "fail"} />
-              <Stat label="r limit (2.8·sr)" value={fmtSig(prec.rLimit)} unit={unit} />
+              <Stat label="Grand mean" value={fmtSig(prec.gm)} unit={unit} onClick={() => setPrecStat("gm")} />
+              <Stat label="sr (repeatability)" value={fmtSig(prec.sr)} unit={unit} onClick={() => setPrecStat("sr")} />
+              <Stat label="RSDr" value={fmt(prec.rsdR, 2)} unit="%" status={prec.rsdR <= cr.rsdRMax ? "pass" : "fail"} onClick={() => setPrecStat("rsdr")} />
+              <Stat label="sI (intermediate)" value={fmtSig(prec.sI)} unit={unit} onClick={() => setPrecStat("sI")} />
+              <Stat label="RSDI" value={fmt(prec.rsdI, 2)} unit="%" status={prec.rsdI <= cr.rsdIMax ? "pass" : "fail"} onClick={() => setPrecStat("rsdI")} />
+              <Stat label="r limit (2.8·sr)" value={fmtSig(prec.rLimit)} unit={unit} onClick={() => setPrecStat("rLimit")} />
             </div>
             {(() => {
               const nBar = prec.N / prec.p;
@@ -3160,9 +3243,13 @@ export default function LabValidatePro() {
             })()}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
               <Card>
-                <CardHeader className="pb-2"><CardTitle className="text-xs text-muted-foreground uppercase tracking-wider">ANOVA table</CardTitle></CardHeader>
+                <CardHeader className="pb-2 flex-row items-baseline justify-between space-y-0">
+                  <CardTitle className="text-xs text-muted-foreground uppercase tracking-wider">ANOVA table</CardTitle>
+                  <span className="text-[10px] text-muted-foreground normal-case">Click a source for its working</span>
+                </CardHeader>
                 <CardContent>
                   <DataTable headers={["Source", "SS", "df", "MS", "F", "F crit (5 %)"]}
+                    onRowClick={(i) => setAnovaRow(i === 0 ? "between" : "within")}
                     rows={[
                       ["Between-group", fmtSig(prec.ssb), prec.dfb, fmtSig(prec.msb),
                         <span key="f" className={prec.f > prec.fCrit ? "text-amber-600 font-semibold" : ""}>{fmt(prec.f, 2)}</span>, fmt(prec.fCrit, 2)],
@@ -3316,16 +3403,16 @@ export default function LabValidatePro() {
                 </div>
                 {prec.horwitz ? (
                   <div className="flex flex-wrap gap-2">
-                    <Stat label="Horwitz PRSD_R" value={fmt(prec.horwitz.predRSDr, 2)} unit="%" />
-                    <Stat label="Pred. RSDr (0.66·PRSD_R)" value={fmt(prec.horwitz.predRSDrRep, 2)} unit="%" />
-                    <Stat label="HorRat_r" value={fmt(prec.horwitz.horRatr, 2)}
+                    <Stat label="Horwitz PRSD_R" value={fmt(prec.horwitz.predRSDr, 2)} unit="%" onClick={() => setPrecStat("hPRSD")} />
+                    <Stat label="Pred. RSDr (0.66·PRSD_R)" value={fmt(prec.horwitz.predRSDrRep, 2)} unit="%" onClick={() => setPrecStat("hPredRSDr")} />
+                    <Stat label="HorRat_r" value={fmt(prec.horwitz.horRatr, 2)} onClick={() => setPrecStat("hHorRatr")}
                       status={prec.horwitz.horRatr >= 0.5 && prec.horwitz.horRatr <= 2 ? "pass" : "fail"} />
                     {prec.horwitz.rsdRepro != null && <>
-                      <Stat label="sR (measured)" value={fmtSig(prec.horwitz.sR)} unit={unit} />
-                      <Stat label="RSD_R" value={fmt(prec.horwitz.rsdRepro, 2)} unit="%" />
-                      <Stat label="HorRat_R" value={fmt(prec.horwitz.horRatR, 2)}
+                      <Stat label="sR (measured)" value={fmtSig(prec.horwitz.sR)} unit={unit} onClick={() => setPrecStat("hSR")} />
+                      <Stat label="RSD_R" value={fmt(prec.horwitz.rsdRepro, 2)} unit="%" onClick={() => setPrecStat("hRSDR")} />
+                      <Stat label="HorRat_R" value={fmt(prec.horwitz.horRatR, 2)} onClick={() => setPrecStat("hHorRatR")}
                         status={prec.horwitz.horRatR >= 0.5 && prec.horwitz.horRatR <= 2 ? "pass" : "fail"} />
-                      <Stat label="R limit (2.8·sR)" value={fmtSig(prec.horwitz.reproLimit)} unit={unit} />
+                      <Stat label="R limit (2.8·sR)" value={fmtSig(prec.horwitz.reproLimit)} unit={unit} onClick={() => setPrecStat("hReproLimit")} />
                     </>}
                   </div>
                 ) : (
@@ -3335,6 +3422,17 @@ export default function LabValidatePro() {
             </Card>
           </>
         )}
+        <Suspense fallback={null}>
+          {precStat && (
+            <PrecisionCalcDialog open statKey={precStat} onClose={() => setPrecStat(null)}
+              prec={prec} unit={unit} groupLabel={study.precision.label}
+              limits={{ rsdRMax: cr.rsdRMax, rsdIMax: cr.rsdIMax }} />
+          )}
+          {anovaRow && (
+            <AnovaCalcDialog open row={anovaRow} onClose={() => setAnovaRow(null)}
+              prec={prec} unit={unit} groupLabel={study.precision.label} />
+          )}
+        </Suspense>
       </div>
     );
   };
@@ -3448,11 +3546,11 @@ export default function LabValidatePro() {
         {comp && comp.mode === "twoSample" && (
           <>
             <div className="flex flex-wrap gap-2">
-              <Stat label={`Mean ${d.labelA || "A"}`} value={fmtSig(comp.tt.m1)} unit={unit} />
-              <Stat label={`Mean ${d.labelB || "B"}`} value={fmtSig(comp.tt.m2)} unit={unit} />
-              <Stat label="Difference" value={fmtSig(comp.tt.diff)} unit={unit} />
-              <Stat label={`s ${d.labelA || "A"}`} value={fmtSig(comp.f.sa)} unit={unit} />
-              <Stat label={`s ${d.labelB || "B"}`} value={fmtSig(comp.f.sb)} unit={unit} />
+              <Stat label={`Mean ${d.labelA || "A"}`} value={fmtSig(comp.tt.m1)} unit={unit} onClick={() => setCompStat("meanA")} />
+              <Stat label={`Mean ${d.labelB || "B"}`} value={fmtSig(comp.tt.m2)} unit={unit} onClick={() => setCompStat("meanB")} />
+              <Stat label="Difference" value={fmtSig(comp.tt.diff)} unit={unit} onClick={() => setCompStat("diff")} />
+              <Stat label={`s ${d.labelA || "A"}`} value={fmtSig(comp.f.sa)} unit={unit} onClick={() => setCompStat("sA")} />
+              <Stat label={`s ${d.labelB || "B"}`} value={fmtSig(comp.f.sb)} unit={unit} onClick={() => setCompStat("sB")} />
             </div>
 
             {/* F-test → t-test decision link */}
@@ -3495,9 +3593,13 @@ export default function LabValidatePro() {
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
               <Card>
-                <CardHeader className="pb-2"><CardTitle className="text-xs text-muted-foreground uppercase tracking-wider">Summary</CardTitle></CardHeader>
+                <CardHeader className="pb-2 flex-row items-baseline justify-between space-y-0">
+                  <CardTitle className="text-xs text-muted-foreground uppercase tracking-wider">Summary</CardTitle>
+                  <span className="text-[10px] text-muted-foreground normal-case">Click a test for its working</span>
+                </CardHeader>
                 <CardContent>
                   <DataTable headers={["Test", "Statistic", "Critical (95 %)", "Outcome"]}
+                    onRowClick={(i) => setFtRow(i === 0 ? "F" : "t")}
                     rows={[
                       ["F (variances)", fmt(comp.f.F, 3), fmt(comp.f.fCrit, 2),
                         <span key="f" className={comp.f.significant ? "text-amber-600 font-semibold" : "text-emerald-600 font-semibold"}>{comp.f.significant ? "Differ" : "Comparable"}</span>],
@@ -3625,12 +3727,12 @@ export default function LabValidatePro() {
         {comp && comp.mode === "oneSample" && (
           <>
             <div className="flex flex-wrap gap-2">
-              <Stat label="Mean" value={fmtSig(comp.mean)} unit={unit} />
-              <Stat label="Reference" value={fmtSig(comp.ref)} unit={unit} />
-              <Stat label="Bias" value={fmtSig(comp.bias)} unit={unit} />
-              {comp.biasPct != null && <Stat label="Bias" value={fmt(comp.biasPct, 2)} unit="%" />}
-              <Stat label="t" value={fmt(comp.t, 3)} status={comp.significant ? "warn" : "pass"} />
-              <Stat label="t crit (95 %)" value={fmt(comp.tCrit, 3)} />
+              <Stat label="Mean" value={fmtSig(comp.mean)} unit={unit} onClick={() => setCompStat("mean")} />
+              <Stat label="Reference" value={fmtSig(comp.ref)} unit={unit} onClick={() => setCompStat("ref")} />
+              <Stat label="Bias" value={fmtSig(comp.bias)} unit={unit} onClick={() => setCompStat("bias")} />
+              {comp.biasPct != null && <Stat label="Bias" value={fmt(comp.biasPct, 2)} unit="%" onClick={() => setCompStat("biasPct")} />}
+              <Stat label="t" value={fmt(comp.t, 3)} status={comp.significant ? "warn" : "pass"} onClick={() => setCompStat("t")} />
+              <Stat label="t crit (95 %)" value={fmt(comp.tCrit, 3)} onClick={() => setCompStat("tCrit")} />
             </div>
             <WorkSteps steps={[
               { label: "1. Mean, SD and standard error", formula: `x̄ = ${fmtSig(comp.mean)} ${unit}   s = ${fmtSig(comp.sd)}   SE = s/√n = ${fmtSig(comp.se)}   (n = ${comp.a.length})` },
@@ -3694,6 +3796,18 @@ export default function LabValidatePro() {
             </Card>
           </>
         )}
+        <Suspense fallback={null}>
+          {compStat && (
+            <ComparisonCalcDialog open statKey={compStat} onClose={() => setCompStat(null)}
+              comp={comp} unit={unit}
+              labels={{ a: d.labelA || "A", b: d.labelB || "B" }} />
+          )}
+          {ftRow && (
+            <FtSummaryCalcDialog open row={ftRow} onClose={() => setFtRow(null)}
+              comp={comp} unit={unit}
+              labels={{ a: d.labelA || "A", b: d.labelB || "B" }} />
+          )}
+        </Suspense>
       </div>
     );
   };
@@ -3725,11 +3839,11 @@ export default function LabValidatePro() {
             </Card>
             {trueness?.mode === "crm" && (
               <div className="flex flex-wrap gap-2">
-                <Stat label="Mean" value={fmtSig(trueness.mean)} unit={unit} />
-                <Stat label="Bias" value={fmtSig(trueness.bias, 3)} unit={unit} />
-                <Stat label="Bias %" value={fmt(trueness.biasPct, 2)} unit="%" status={trueness.significant ? "fail" : "pass"} />
-                <Stat label="Recovery" value={fmt(trueness.recovery, 1)} unit="%" />
-                <Stat label="t / t crit" value={`${fmt(trueness.t, 2)} / ${fmt(trueness.tCrit, 2)}`} status={trueness.significant ? "fail" : "pass"} />
+                <Stat label="Mean" value={fmtSig(trueness.mean)} unit={unit} onClick={() => setTrueStat("mean")} />
+                <Stat label="Bias" value={fmtSig(trueness.bias, 3)} unit={unit} onClick={() => setTrueStat("bias")} />
+                <Stat label="Bias %" value={fmt(trueness.biasPct, 2)} unit="%" status={trueness.significant ? "fail" : "pass"} onClick={() => setTrueStat("biasPct")} />
+                <Stat label="Recovery" value={fmt(trueness.recovery, 1)} unit="%" onClick={() => setTrueStat("recovery")} />
+                <Stat label="t / t crit" value={`${fmt(trueness.t, 2)} / ${fmt(trueness.tCrit, 2)}`} status={trueness.significant ? "fail" : "pass"} onClick={() => setTrueStat("t")} />
               </div>
             )}
             {trueness?.mode === "crm" && (
@@ -3795,14 +3909,15 @@ export default function LabValidatePro() {
             {trueness?.mode === "spike" && (
               <div className="flex flex-wrap gap-2">
                 {trueness.method === "volume" && <>
-                  <Stat label="Expected mix conc" value={fmtSig(trueness.cExpected)} unit={unit} />
-                  <Stat label="Spike added (in mix)" value={fmtSig(trueness.spikeAdded)} unit={unit} />
-                  <Stat label="Total recovery" value={fmt(trueness.recTotal, 1)} unit="%" />
+                  <Stat label="Expected mix conc" value={fmtSig(trueness.cExpected)} unit={unit} onClick={() => setTrueStat("cExpected")} />
+                  <Stat label="Spike added (in mix)" value={fmtSig(trueness.spikeAdded)} unit={unit} onClick={() => setTrueStat("spikeAdded")} />
+                  <Stat label="Total recovery" value={fmt(trueness.recTotal, 1)} unit="%" onClick={() => setTrueStat("recTotal")} />
                 </>}
                 <Stat label={trueness.method === "volume" ? "Spike recovery" : "Marginal recovery"}
-                  value={fmt(trueness.recovery, 1)} unit="%" status={trueness.significant ? "fail" : "pass"} />
-                <Stat label="u(Rec)" value={fmt(trueness.sdRec, 2)} unit="%" />
-                <Stat label="t / t crit" value={`${fmt(trueness.t, 2)} / ${fmt(trueness.tCrit, 2)}`} status={trueness.significant ? "fail" : "pass"} />
+                  value={fmt(trueness.recovery, 1)} unit="%" status={trueness.significant ? "fail" : "pass"}
+                  onClick={() => setTrueStat("spikeRecovery")} />
+                <Stat label="u(Rec)" value={fmt(trueness.sdRec, 2)} unit="%" onClick={() => setTrueStat("uRec")} />
+                <Stat label="t / t crit" value={`${fmt(trueness.t, 2)} / ${fmt(trueness.tCrit, 2)}`} status={trueness.significant ? "fail" : "pass"} onClick={() => setTrueStat("t")} />
               </div>
             )}
             {trueness?.mode === "spike" && (
@@ -3846,6 +3961,14 @@ export default function LabValidatePro() {
             )}
           </TabsContent>
         </Tabs>
+        <Suspense fallback={null}>
+          {trueStat && (
+            <TruenessCalcDialog open statKey={trueStat} onClose={() => setTrueStat(null)}
+              trueness={trueness} unit={unit} refValue={num(d.crmRef)} refU={num(d.crmU)}
+              reps={{ crmReps: clean(d.crmReps), unspiked: clean(d.unspiked), spiked: clean(d.spiked) }}
+              limits={{ recMin: num(cr.recMin), recMax: num(cr.recMax) }} />
+          )}
+        </Suspense>
       </div>
     );
   };
@@ -3853,6 +3976,11 @@ export default function LabValidatePro() {
   const RecoveryModule = () => {
     const L = study.recovery.levels;
     const setL = (v) => up("recovery", { levels: v });
+    // Same filter `rec` applies, so these line up index-for-index with it and
+    // the calculation walkthrough can show the replicates behind each row.
+    const recLevels = L
+      .map((lv) => ({ conc: num(lv.conc), reps: clean(lv.reps) }))
+      .filter((lv) => lv.reps.length >= 2 && lv.conc);
     const recMin = num(cr.recMin) ?? 80;
     const recMax = num(cr.recMax) ?? 120;
     const yLo = Math.min(60, recMin - 10);
@@ -3931,9 +4059,13 @@ export default function LabValidatePro() {
           <>
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
               <Card>
-                <CardHeader className="pb-2"><CardTitle className="text-xs text-muted-foreground uppercase tracking-wider">Results</CardTitle></CardHeader>
+                <CardHeader className="pb-2 flex-row items-baseline justify-between space-y-0">
+                  <CardTitle className="text-xs text-muted-foreground uppercase tracking-wider">Results</CardTitle>
+                  <span className="text-[10px] text-muted-foreground normal-case">Click a level for its working</span>
+                </CardHeader>
                 <CardContent>
                   <DataTable headers={["Level", "n", "Mean", "SD", "RSD %", "Recovery %", ""]}
+                    onRowClick={setRecRow}
                     rows={rec.map((r) => [
                       `${fmt(r.conc, 2)} ${unit}`, r.n, fmtSig(r.mean), fmtSig(r.sd, 3), fmt(r.rsd, 2), fmt(r.recovery, 1),
                       <StatusBadge key="s" s={r.recovery >= cr.recMin && r.recovery <= cr.recMax ? "pass" : "fail"} />,
@@ -4021,6 +4153,13 @@ export default function LabValidatePro() {
             })()}
           </>
         )}
+        <Suspense fallback={null}>
+          {recRow != null && (
+            <RecoveryCalcDialog open index={recRow} onClose={() => setRecRow(null)}
+              rec={rec} levels={recLevels} unit={unit}
+              limits={{ recMin: num(cr.recMin), recMax: num(cr.recMax) }} />
+          )}
+        </Suspense>
       </div>
     );
   };
@@ -4029,6 +4168,12 @@ export default function LabValidatePro() {
     const F = study.robustness.factors;
     const setF = (v) => up("robustness", { factors: v });
     const chartData = robust.map((r) => ({ name: r.name, effect: r.effectPct }));
+    // Repeatability critical difference — the same figure the "vs sr" column
+    // tests against, broken out so the walkthrough can show how it was formed.
+    const robustNoise = prec ? {
+      sr: prec.sr, dfw: prec.dfw, t: S.tCrit95(prec.dfw), nBar: prec.N / prec.p,
+      value: (prec.sr * S.tCrit95(prec.dfw) * Math.SQRT2) / Math.sqrt(prec.N / prec.p),
+    } : null;
     return (
       <div className="space-y-4">
         <GuideNote>
@@ -4063,9 +4208,13 @@ export default function LabValidatePro() {
           <>
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             <Card>
-              <CardHeader className="pb-2"><CardTitle className="text-xs text-muted-foreground uppercase tracking-wider">Effect evaluation</CardTitle></CardHeader>
+              <CardHeader className="pb-2 flex-row items-baseline justify-between space-y-0">
+                <CardTitle className="text-xs text-muted-foreground uppercase tracking-wider">Effect evaluation</CardTitle>
+                <span className="text-[10px] text-muted-foreground normal-case">Click a factor for its working</span>
+              </CardHeader>
               <CardContent>
                 <DataTable headers={["Factor", "Effect", "Effect %", "vs sr", ""]}
+                  onRowClick={setRobustRow}
                   rows={robust.map((r) => [
                     r.name || "—", fmtSig(r.effect, 3), fmt(r.effectPct, 2),
                     r.srTest === null ? "n/a" : r.srTest ? <span className="text-amber-600">significant</span> : "within noise",
@@ -4216,6 +4365,13 @@ export default function LabValidatePro() {
           })()}
           </>
         )}
+        <Suspense fallback={null}>
+          {robustRow != null && (
+            <RuggednessCalcDialog open index={robustRow} onClose={() => setRobustRow(null)}
+              robust={robust} unit={unit} noise={robustNoise}
+              limits={{ robustPctMax: num(cr.robustPctMax) }} />
+          )}
+        </Suspense>
       </div>
     );
   };
@@ -4232,11 +4388,11 @@ export default function LabValidatePro() {
       ) : (
         <>
           <div className="flex flex-wrap gap-2">
-            <Stat label="u(P) = sI" value={fmtSig(mu.uPrec)} unit={unit} />
-            <Stat label="u(bias)" value={mu.uBias !== null ? fmtSig(mu.uBias) : "—"} unit={unit} />
-            <Stat label="uc" value={fmtSig(mu.uc)} unit={unit} />
-            <Stat label="U (k=2)" value={fmtSig(mu.U)} unit={unit} status="pass" />
-            <Stat label="U relative" value={fmt(mu.UPct, 2)} unit="%" />
+            <Stat label="u(P) = sI" value={fmtSig(mu.uPrec)} unit={unit} onClick={() => setUncStat("uPrec")} />
+            <Stat label="u(bias)" value={mu.uBias !== null ? fmtSig(mu.uBias) : "—"} unit={unit} onClick={() => setUncStat("uBias")} />
+            <Stat label="uc" value={fmtSig(mu.uc)} unit={unit} onClick={() => setUncStat("uc")} />
+            <Stat label="U (k=2)" value={fmtSig(mu.U)} unit={unit} status="pass" onClick={() => setUncStat("U")} />
+            <Stat label="U relative" value={fmt(mu.UPct, 2)} unit="%" onClick={() => setUncStat("UPct")} />
           </div>
           <Card>
             <CardHeader className="pb-2"><CardTitle className="text-xs text-muted-foreground uppercase tracking-wider">Budget</CardTitle></CardHeader>
@@ -4357,6 +4513,13 @@ export default function LabValidatePro() {
           })()}
         </>
       )}
+      <Suspense fallback={null}>
+        {uncStat && (
+          <UncertaintyCalcDialog open statKey={uncStat} onClose={() => setUncStat(null)}
+            mu={mu} prec={prec} trueness={trueness} refU={num(study.trueness.crmU)}
+            unit={unit} groupLabel={study.precision.label} />
+        )}
+      </Suspense>
     </div>
   );
 
@@ -4560,6 +4723,7 @@ export default function LabValidatePro() {
             onExport={exportJSON}
             onOpenAccount={() => setAccountOpen(true)}
             onOpenAbout={() => setAboutOpen(true)}
+            onOpenVersion={() => setVersionOpen(true)}
             onOpenTutorial={() => setTutorialOpen(true)}
             onOpenFeedback={() => setFeedbackOpen(true)}
             onOpenReport={() => setReportOpen(true)}
@@ -4854,7 +5018,12 @@ export default function LabValidatePro() {
             onDeleted={handleAccountDeleted}
           />
         )}
-        {aboutOpen && <AboutDialog open onClose={() => setAboutOpen(false)} onOpenTerms={() => setTermsOpen(true)} />}
+        {aboutOpen && (
+          <AboutDialog open onClose={() => setAboutOpen(false)} onOpenTerms={() => setTermsOpen(true)}
+            // Both dialogs sit on the same layer, so hand over rather than stack.
+            onOpenVersion={() => { setAboutOpen(false); setVersionOpen(true); }} />
+        )}
+        {versionOpen && <AppVersionDialog open onClose={() => setVersionOpen(false)} />}
         {tutorialOpen && <TutorialDialog open onClose={() => setTutorialOpen(false)} />}
 
         {/* Feedback — voluntary dialog (dismissible) */}

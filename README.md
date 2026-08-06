@@ -4,7 +4,7 @@
 
 Aligned with **EURACHEM** *“The Fitness for Purpose of Analytical Methods”, 3rd Ed. (2025)* and **ISO/IEC 17025:2017**.
 
-![Version](https://img.shields.io/badge/version-1.2.0-0f766e)
+![Version](https://img.shields.io/badge/version-1.3.0-0f766e)
 ![React](https://img.shields.io/badge/React-18-149eca)
 ![Vite](https://img.shields.io/badge/Vite-6-646cff)
 ![Tailwind CSS](https://img.shields.io/badge/Tailwind-3-38bdf8)
@@ -44,9 +44,10 @@ It runs entirely in the browser for the calculations, with an optional account s
 ## Key features
 
 - **Statistics engine** built around the Eurachem guidance — regression, critical-value tables (t, F), Grubbs, ANOVA variance components, Horwitz/HorRat, MDL/IDL.
+- **Show the calculation** — every result card opens a step-by-step walkthrough: the formula, your own numbers substituted into it, the intermediate tables, and the final value. Available for Linearity & Range, LOD/LOQ, Precision (full one-way ANOVA table), Trueness/Bias, F & t tests, Recovery and Uncertainty.
 - **Diagnostic charts** — calibration & residual plots, LOD/LOQ distribution view, trueness/bias and spike-recovery distributions (Recharts).
 - **PDF reports** — one-click, print-ready study reports generated with `@react-pdf/renderer`.
-- **Worked examples** included — copper by GF-AAS, lead by ICP-MS, and iron by FAAS method comparison.
+- **Worked examples** included — trace metals (Cu by GF-AAS, Pb by ICP-MS, Fe by FAAS comparison) plus transformer-oil methods: water by Karl Fischer (IEC 60814), dissolved gas analysis of the nine IEC 60567 fault gases, kinematic viscosity at 40 °C and 100 °C (ASTM D445), and the five IEC 61198 furans by HPLC-UV. A search box filters the examples and your saved studies as you type.
 - **Cloud sync or local-only** — save studies to your account, or export/import as JSON as a guest.
 - **Light & dark mode**, responsive layout, keyboard-friendly UI (shadcn/ui + Radix).
 
@@ -76,6 +77,7 @@ During local development a small Vite plugin (`dev-api-plugin.mjs`) serves the s
 │   ├── studies/            # list / get / save / rename / delete
 │   └── admin/users/        # admin user management
 ├── lib/apiClient.js        # Thin fetch wrappers around /api
+├── lib/appVersion.js       # Version + changelog shown by the App version dialog
 ├── scripts/init-db.mjs     # One-time database setup
 ├── dev-api-plugin.mjs      # Serves /api during `npm run dev`
 └── src/main.jsx            # React entry point
@@ -150,6 +152,37 @@ LabValidate Pro ships with a lightweight beta-access model:
 - **Trial** — new testers get a `TRIAL_DAYS` window (default 30 days).
 - **Feedback-gated access** — testers submit feedback to unlock a longer `ACCESS_DAYS` window (default 1 year); with `BETA_AUTO_APPROVE=false` the admin approves each tester manually.
 - **Admin panel** — manage users, and review feedback and bug/idea reports.
+
+## Version history
+
+The same history is available inside the app: **⚙ Settings → App version**. It is rendered from
+[`lib/appVersion.js`](lib/appVersion.js) — when you release, bump `APP_VERSION` there, add the entry
+to `CHANGELOG`, and update `version` in `package.json` and the badge at the top of this file.
+
+### 1.3.0 — 7 August 2026 · *Show the calculation*
+
+- **Calculation walkthroughs.** Every result card can open a "how was this calculated" modal: the formula, your numbers substituted into it, the intermediate tables and the final value, step by step. Covers Linearity & Range, LOD/LOQ, Precision (including the full one-way ANOVA table), Trueness/Bias, F & t tests, Recovery and Uncertainty.
+- **New worked examples — transformer oil.** Water content by coulometric Karl Fischer titration (IEC 60814); dissolved gas analysis of the nine IEC 60567 fault gases, rebuilt from real GC verification data with LOD/LOQ derived from the actual calibration (3.3 · S<sub>y/x</sub> / b₁) over the 100–1000 µL/L working range; kinematic viscosity by glass capillary viscometer at 40 °C and 100 °C (ASTM D445) against certified viscosity standards; and the five IEC 61198 furans (2-FAL, 5-HMF, 2-FOL, 2-ACF, 5-MEF) by HPLC-UV, each as its own full validation study.
+- **Search across examples and saved studies** — one field filters both lists as you type, with a match count and clear button.
+- **Presets modal** stays centred with only its list scrolling.
+- **App version dialog** (this changelog, in-app).
+
+### 1.2.0 — 28 July 2026 · *Print-ready reports*
+
+- Expanded PDF study report, with the diagnostic charts redrawn for print.
+- Additional report charts so the PDF matches the in-app view.
+- App icon, favicon and build configuration prepared for deployment.
+
+### 1.1.0 — 27 July 2026 · *Deeper statistics*
+
+- Substantially expanded statistics engine across the validation modules — regression diagnostics, variance components, critical-value handling and the pass/fail logic behind each characteristic.
+- Richer study report content and account handling.
+
+### 1.0.0 — 26 July 2026 · *First release*
+
+- All eleven modules: Study Plan, Selectivity, Linearity & Range, LOD/LOQ, Trueness/Bias, Precision, F & t tests, Recovery, Ruggedness, Uncertainty and Report.
+- Aligned with EURACHEM 3rd Ed. (2025) and ISO/IEC 17025:2017.
+- Accounts with cloud-synced studies, or local-only guest use.
 
 ## Data & privacy
 

@@ -1,10 +1,11 @@
-import { FlaskConical, X, ExternalLink, ShieldCheck, Cloud, Info, FileText, Coffee } from "lucide-react";
+import { FlaskConical, X, ExternalLink, ShieldCheck, Cloud, Info, FileText, Coffee, History } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { APP_VERSION } from "@/lib/appVersion";
 
 const LINKEDIN_URL = "https://www.linkedin.com/in/chm-hadi-fauzi";
 const PAYPAL_SUPPORT_URL = "https://paypal.me/hadifauzi89";
 
-export function AboutDialog({ open, onClose, onOpenTerms }) {
+export function AboutDialog({ open, onClose, onOpenTerms, onOpenVersion }) {
   if (!open) return null;
   return (
     <div className="lvp-no-print fixed inset-0 z-50 flex items-start justify-center p-4 sm:p-6 overflow-y-auto" onClick={onClose}>
@@ -25,7 +26,7 @@ export function AboutDialog({ open, onClose, onOpenTerms }) {
             </div>
             <div>
               <div className="font-semibold tracking-tight">LabValidate <span className="text-primary">Pro</span></div>
-              <div className="text-[11px] font-data text-muted-foreground">Version 1.2.0</div>
+              <div className="text-[11px] font-data text-muted-foreground">Version {APP_VERSION}</div>
             </div>
           </div>
 
@@ -62,6 +63,15 @@ export function AboutDialog({ open, onClose, onOpenTerms }) {
             Buy me a coffee
             <ExternalLink className="ml-auto h-3.5 w-3.5" aria-hidden="true" />
           </a>
+
+          {onOpenVersion && (
+            <button type="button" onClick={onOpenVersion}
+              className="flex w-full items-center gap-2 rounded-lg border border-border px-3 py-2.5 text-[12px] font-medium transition-colors hover:bg-muted">
+              <History className="h-4 w-4 text-primary shrink-0" />
+              What&rsquo;s new in this version
+              <span className="ml-auto font-data text-muted-foreground">v{APP_VERSION}</span>
+            </button>
+          )}
 
           <button type="button" onClick={onOpenTerms}
             className="flex w-full items-center gap-2 rounded-lg border border-border px-3 py-2.5 text-[12px] font-medium transition-colors hover:bg-muted">

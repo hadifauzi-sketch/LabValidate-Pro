@@ -1,19 +1,21 @@
 import { useState } from "react";
 import {
   Settings, UserCircle2, Info, GraduationCap, Sun, Moon, LogIn, LogOut, Cloud, CloudOff,
-  Upload, Download, MessageSquare, ShieldCheck, Bug,
+  Upload, Download, MessageSquare, ShieldCheck, Bug, History,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { Separator } from "@/components/ui/separator";
+import { APP_VERSION } from "@/lib/appVersion";
 
-function Item({ icon: Icon, label, onClick, danger }) {
+function Item({ icon: Icon, label, onClick, danger, hint }) {
   return (
     <button onClick={onClick}
       className={`flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-[13px] text-left transition-colors hover:bg-muted ${danger ? "text-destructive" : "text-foreground"}`}>
       <Icon className={`h-4 w-4 shrink-0 ${danger ? "" : "text-muted-foreground"}`} />
       <span>{label}</span>
+      {hint && <span className="ml-auto font-data text-[11px] text-muted-foreground">{hint}</span>}
     </button>
   );
 }
@@ -30,7 +32,7 @@ function accessText(a) {
   return `Access · ${a.daysLeft} day${a.daysLeft === 1 ? "" : "s"} left`;
 }
 
-export function SettingsMenu({ user, dark, setDark, onImport, onExport, onOpenAccount, onOpenAbout, onOpenTutorial, onOpenFeedback, onOpenReport, onOpenAdmin, onSignIn, onSignOut }) {
+export function SettingsMenu({ user, dark, setDark, onImport, onExport, onOpenAccount, onOpenAbout, onOpenVersion, onOpenTutorial, onOpenFeedback, onOpenReport, onOpenAdmin, onSignIn, onSignOut }) {
   const [open, setOpen] = useState(false);
   const run = (fn) => () => { setOpen(false); fn?.(); };
   const isAdmin = !!user?.access?.isAdmin;
@@ -83,6 +85,7 @@ export function SettingsMenu({ user, dark, setDark, onImport, onExport, onOpenAc
           ? <Item icon={UserCircle2} label="Account" onClick={run(onOpenAccount)} />
           : <Item icon={LogIn} label="Sign in / Create account" onClick={run(onSignIn)} />}
         <Item icon={Info} label="About this app" onClick={run(onOpenAbout)} />
+        <Item icon={History} label="App version" hint={`v${APP_VERSION}`} onClick={run(onOpenVersion)} />
         <Item icon={GraduationCap} label="Tutorial" onClick={run(onOpenTutorial)} />
         <Item icon={dark ? Sun : Moon} label={dark ? "Light appearance" : "Dark appearance"} onClick={run(() => setDark(!dark))} />
 
